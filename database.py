@@ -1,4 +1,5 @@
-﻿from abc import ABC, abstractmethod
+﻿import uuid
+from abc import ABC, abstractmethod
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -11,6 +12,10 @@ class DatabaseInterface(ABC):
 
     @abstractmethod
     def insert(self, collection, data):
+        pass
+
+    @abstractmethod
+    def get_all(self, collection):
         pass
 
 
@@ -28,10 +33,14 @@ class MongoRepo(DatabaseInterface):
         db = self.client.get_database()
         return db[collection].insert_one(data)
 
+    def get_all(self, collection):
+        db = self.client.get_database()
+        return list(db[collection].find())
+
 
 ## ==================================== need to make implementation ===========================================
 class QdrantRepo(DatabaseInterface):
-    def __init__(self, storage_path="./qdrant_data"):
+    def __init__(self, storage_path="./db/qdrant_data"):
         self.path = storage_path
         self.client = None
 
@@ -51,5 +60,23 @@ class QdrantRepo(DatabaseInterface):
         return self.client
 
     def insert(self, collection, data):
-        # Qdrant requires points/vectors; this is a simplified example
-        return self.client.upsert(collection_name=collection, points=[data])
+        # 1. Create a dummy vector of 4 floats (since size=4)
+        # In a real app, you'd use an embedding model to turn text into these numbers
+        dummy_vector = [0.1, 0.2, 0.3, 0.4]
+
+        # 2. Qdrant needs a PointStruct
+        point = models.PointStruct(
+            id=str(uuid.uuid4()),  # Generates a unique ID
+            vector=dummy_vector,
+            payload=data  # This is where your dictionary {"content": "..."} goes
+        )
+
+        return self.client.upsert(
+            collection_name=collection,
+            points=[point]
+        )
+
+    def get_all(self, collection):
+        # We scroll through points to get the 'payload' (your data)
+        results, _ = self.client.scroll(collection_name=collection, with_payload=True)
+        return [point.payload for point in results]

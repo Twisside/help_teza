@@ -3,10 +3,10 @@ from database import QdrantRepo, MongoRepo
 
 app = Flask(__name__)
 
-USE_QDRANT = False
+USE_QDRANT = True
 
 if USE_QDRANT:
-    db = QdrantRepo(location="http://localhost:6333")
+    db = QdrantRepo()
 else:
     db = MongoRepo(uri="mongodb://localhost:27017/try_teza")
 
@@ -17,12 +17,26 @@ def home():
     if request.method == 'POST':
         # 'user_input' matches the 'name' attribute in our HTML input
         entry = request.form.get('user_input')
-        db.insert("inputs", {"in":entry})
+        db.insert("user_entries", {"content":entry})
 
     return render_template('home.html', entry=entry)
 
 
-# help
+@app.route('/db/')
+def lookdb():
+    entries = db.get_all("user_entries")
+
+    return entries
+
+import atexit
+
+# Shutdown behavior
+def shutdown():
+    if hasattr(db, 'client') and db.client:
+        print("Closing database connection...")
+        db.client.close()
+
+atexit.register(shutdown)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
