@@ -3,7 +3,9 @@ from abc import ABC, abstractmethod
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-
+from embedding import EmbeddingService, QwenEmbeddingService, GemmaEmbeddingService
+import os
+os.environ["HF_TOKEN"] = "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"
 
 class DatabaseInterface(ABC):
     @abstractmethod
@@ -16,6 +18,14 @@ class DatabaseInterface(ABC):
 
     @abstractmethod
     def get_all(self, collection):
+        pass
+
+    @abstractmethod
+    def update(self, collection, item_id, new_data):
+        pass
+
+    @abstractmethod
+    def delete(self, collection, item_id):
         pass
 
 
@@ -37,46 +47,100 @@ class MongoRepo(DatabaseInterface):
         db = self.client.get_database()
         return list(db[collection].find())
 
+    def update(self, collection, item_id, new_data):
+        from bson.objectid import ObjectId
+        db = self.client.get_database()
+        return db[collection].update_one({"_id": ObjectId(item_id)}, {"$set": new_data})
 
-## ==================================== need to make implementation ===========================================
+    def delete(self, collection, item_id):
+        from bson.objectid import ObjectId
+        db = self.client.get_database()
+        return db[collection].delete_one({"_id": ObjectId(item_id)})
+
+
+##    ==================================== MAIN QDRANT ===========================================
+
+
 class QdrantRepo(DatabaseInterface):
-    def __init__(self, storage_path="./db/qdrant_data"):
+    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cpu"):
         self.path = storage_path
         self.client = None
+        self.device = device
+
+        # Manual Switch Logic
+        if use_qwen:
+            print("Initializing Qwen3-Embedding-0.6B...")
+            self.embedder = QwenEmbeddingService(device=self.device)
+            self.collection_name = "user_entries_qwen"
+        else:
+            print("Initializing EmbeddingGemma-300M...")
+            self.embedder = GemmaEmbeddingService(device=self.device)
+            self.collection_name = "user_entries_gemma"
 
     def connect(self):
-        # This initializes the local on-disk DB
         self.client = QdrantClient(path=self.path)
 
-        # Check if collection exists so we don't error out on restart
-        collections = self.client.get_collections().collections
-        exists = any(c.name == "user_entries" for c in collections)
-
-        if not exists:
+        # Create a collection specific to the model's dimensions
+        if not self.client.collection_exists(self.collection_name):
             self.client.create_collection(
-                collection_name="user_entries",
-                vectors_config=models.VectorParams(size=4, distance=models.Distance.COSINE),
+                collection_name=self.collection_name,
+                vectors_config=models.VectorParams(
+                    size=self.embedder.dimension,
+                    distance=models.Distance.COSINE
+                ),
             )
         return self.client
 
     def insert(self, collection, data):
-        # 1. Create a dummy vector of 4 floats (since size=4)
-        # In a real app, you'd use an embedding model to turn text into these numbers
-        dummy_vector = [0.1, 0.2, 0.3, 0.4]
+        # We override the 'collection' argument with our model-specific one
+        target_col = self.collection_name
 
-        # 2. Qdrant needs a PointStruct
+        text_to_embed = data.get("content", "")
+        vector = self.embedder.embed_text(text_to_embed)
+
         point = models.PointStruct(
-            id=str(uuid.uuid4()),  # Generates a unique ID
-            vector=dummy_vector,
-            payload=data  # This is where your dictionary {"content": "..."} goes
+            id=str(uuid.uuid4()),
+            vector=vector,
+            payload=data
         )
 
         return self.client.upsert(
-            collection_name=collection,
+            collection_name=target_col,
             points=[point]
         )
 
+    def update(self, collection, item_id, new_data):
+        target_col = self.collection_name
+
+        if "content" in new_data:
+            new_vector = self.embedder.embed_text(new_data["content"])
+            return self.client.upsert(
+                collection_name=target_col,
+                points=[
+                    models.PointStruct(
+                        id=item_id,
+                        vector=new_vector,
+                        payload=new_data
+                    )
+                ]
+            )
+
+        return self.client.set_payload(
+            collection_name=target_col,
+            payload=new_data,
+            points=[item_id]
+        )
+
     def get_all(self, collection):
-        # We scroll through points to get the 'payload' (your data)
-        results, _ = self.client.scroll(collection_name=collection, with_payload=True)
-        return [point.payload for point in results]
+        points, _ = self.client.scroll(
+            collection_name=self.collection_name,
+            with_payload=True,
+            with_vectors=False
+        )
+        return [{"id": p.id, **p.payload} for p in points]
+
+    def delete(self, collection, item_id):
+        return self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=models.PointIdsList(points=[item_id])
+        )
