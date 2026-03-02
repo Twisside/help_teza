@@ -5,7 +5,6 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from embedding import EmbeddingService, QwenEmbeddingService, GemmaEmbeddingService
 import os
-os.environ["HF_TOKEN"] = "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"
 
 class DatabaseInterface(ABC):
     @abstractmethod
