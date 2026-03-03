@@ -3,7 +3,7 @@
 from database import QdrantRepo, MongoRepo
 
 app = Flask(__name__)
-db = QdrantRepo() # use_qwen=False
+db = QdrantRepo(use_qwen=True) #8187
 db.connect()
 
 
@@ -16,9 +16,18 @@ def home():
         # Always redirect after a POST to prevent "form resubmission" popups
         return redirect(url_for('home'))
 
-    # Read the data to display it
-    all_entries = db.get_all("user_entries")
-    return render_template('home.html', entries=all_entries)
+    query = request.args.get('search')
+
+    if query:
+        # Use our new search method!
+        search_results = db.search("user_entries", query, limit=5)
+        # Flatten the results to match our template's expected format
+        all_entries = [{"id": r['id'], **r['payload'], "score": r['score']} for r in search_results]
+    else:
+        # Default view: show everything
+        all_entries = db.get_all("user_entries")
+
+    return render_template('home.html', entries=all_entries, is_search=bool(query))
 
 
 @app.route('/db/update/<collection>/<item_id>', methods=['POST'])

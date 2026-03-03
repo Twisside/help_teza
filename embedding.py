@@ -20,14 +20,10 @@ class GemmaEmbeddingService(EmbeddingService):
         self.model = SentenceTransformer(model_name, device=device)
         self._dim = 768  # Default dimension for Gemma-300M
 
-    def embed_text(self, text: str, task_type="STS") -> list[float]:
-        """
-        Gemma uses specific prompt names:
-        'STS' for similarity, 'Retrieval-query' for searching.
-        """
-        # Gemma models are designed to use prompt_name for best results
-        embedding = self.model.encode(text, prompt_name=task_type)
-        return embedding.tolist()
+    def embed_text(self, text: str, is_query: bool = True) -> list[float]:
+        # Gemma uses 'Retrieval-query' for searching and 'STS' for indexing
+        task = "Retrieval-query" if is_query else "STS"
+        return self.model.encode(text, prompt_name=task).tolist()
 
     @property
     def dimension(self) -> int:
@@ -39,19 +35,11 @@ class QwenEmbeddingService(EmbeddingService):
         self.model = SentenceTransformer(model_name, device=device)
         self._dim = 1024  # Default dimension for Qwen3-0.6B
 
-    def embed_text(self, text: str, instruction: str = None) -> list[float]:
-        """
-        Qwen is instruction-aware.
-        Example instruction: "Given a web search query, retrieve relevant passages."
-        """
-        if instruction:
-            # Qwen typically expects the instruction prepended or via a prompt argument
-            full_text = f"Instruct: {instruction}\nQuery: {text}"
-        else:
-            full_text = text
-
-        embedding = self.model.encode(full_text)
-        return embedding.tolist()
+    def embed_text(self, text: str, is_query: bool = True) -> list[float]:
+        # Qwen performs better if you explicitly label queries
+        prefix = "Query: " if is_query else "Document: "
+        full_text = f"{prefix}{text}"
+        return self.model.encode(full_text).tolist()
 
     @property
     def dimension(self) -> int:

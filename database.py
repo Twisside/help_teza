@@ -5,7 +5,11 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from embedding import EmbeddingService, QwenEmbeddingService, GemmaEmbeddingService
 import os
-os.environ["HF_TOKEN"] = "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"
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Loads variables from .env
+os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
 
 class DatabaseInterface(ABC):
     @abstractmethod
@@ -77,6 +81,7 @@ class QdrantRepo(DatabaseInterface):
             self.embedder = GemmaEmbeddingService(device=self.device)
             self.collection_name = "user_entries_gemma"
 
+
     def connect(self):
         self.client = QdrantClient(path=self.path)
 
@@ -90,6 +95,7 @@ class QdrantRepo(DatabaseInterface):
                 ),
             )
         return self.client
+
 
     def insert(self, collection, data):
         # We override the 'collection' argument with our model-specific one
@@ -108,6 +114,7 @@ class QdrantRepo(DatabaseInterface):
             collection_name=target_col,
             points=[point]
         )
+
 
     def update(self, collection, item_id, new_data):
         target_col = self.collection_name
@@ -131,6 +138,7 @@ class QdrantRepo(DatabaseInterface):
             points=[item_id]
         )
 
+
     def get_all(self, collection):
         points, _ = self.client.scroll(
             collection_name=self.collection_name,
@@ -139,8 +147,37 @@ class QdrantRepo(DatabaseInterface):
         )
         return [{"id": p.id, **p.payload} for p in points]
 
+
     def delete(self, collection, item_id):
         return self.client.delete(
             collection_name=self.collection_name,
             points_selector=models.PointIdsList(points=[item_id])
         )
+
+
+    def search(self, collection, query_text, limit=5):
+        """
+        Searches for the most relevant items based on query_text.
+        """
+        # 1. Convert text to vector using the same embedder
+        # For Qwen/Gemma, we typically use a 'Retrieval' prompt for searching
+        query_vector = self.embedder.embed_text(query_text)
+
+        # 2. Perform the vector search
+        response = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_vector,
+            limit=limit,
+            with_payload=True
+        )
+
+        # 3. Format the results nicely
+        results = []
+        for hit in response.points:
+            results.append({
+                "id": hit.id,
+                "score": hit.score,  # How similar it is (closer to 1.0 is better)
+                "payload": hit.payload
+            })
+
+        return results

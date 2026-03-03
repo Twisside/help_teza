@@ -3,29 +3,47 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Title</title>
 </head>
 <body>
 
-
+    <h2>Add New Entry</h2>
     <form method="POST" action="/">
-    <input type="text" name="user_input" placeholder="New entry..." required>
-    <button type="submit">Add</button>
+        <input type="text" name="user_input" placeholder="New entry..." required>
+        <button type="submit">Add</button>
     </form>
 
     <hr>
 
+    <h2>Search Database</h2>
+    <form method="GET" action="/">
+        <input type="text" name="search" placeholder="Search by meaning..." value="{{ request.args.get('search', '') }}">
+        <button type="submit">Search</button>
+        {% if is_search %}
+            <a href="/"><button type="button">Clear Search</button></a>
+        {% endif %}
+    </form>
+
+    <hr>
+
+    <h3>{% if is_search %}Search Results{% else %}All Entries{% endif %}</h3>
+
     {% for item in entries %}
-        <div>
-            <p><strong>Content:</strong> {{ item.content }} (ID: {{ item.id }})</p>
+        <div style="border-bottom: 1px solid #eee; padding: 10px 0;">
+            <p><strong>Content:</strong> {{ item.content }}</p>
+
+            {% if item.score %}
+                <p><small style="color: green;">Similarity Score: {{ item.score|round(4) }}</small></p>
+            {% endif %}
 
             <form action="/db/update/user_entries/{{ item.id }}" method="POST" style="display:inline;">
                 <input type="text" name="updated_content" placeholder="Update text...">
                 <button type="submit">Save</button>
             </form>
 
-            <a href="/db/delete/user_entries/{{ item.id }}" style="color:red;">Delete</a>
+            <a href="/db/delete/user_entries/{{ item.id }}" style="color:red; margin-left: 10px;">Delete</a>
         </div>
+    {% else %}
+        <p>No entries found.</p>
     {% endfor %}
 
 </body>
