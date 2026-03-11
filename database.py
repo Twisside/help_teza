@@ -155,28 +155,40 @@ class QdrantRepo(DatabaseInterface):
         )
 
 
-    def search(self, collection, query_text, limit=5):
+    def search(self, collection, query_text, search_tags=None, limit=5):
         """
         Searches for the most relevant items based on query_text.
+        Optionally filters the search by a list of tags.
         """
-        # 1. Convert text to vector using the same embedder
-        # For Qwen/Gemma, we typically use a 'Retrieval' prompt for searching
         query_vector = self.embedder.embed_text(query_text)
 
-        # 2. Perform the vector search
+        query_filter = None
+        if search_tags: # If search_tags is provided as a list (e.g., ["finance", "idea"])
+            query_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="tags", # Changed from 'tag' to 'tags'
+                        match=models.MatchAny(any=search_tags)
+                    )
+                ]
+            )
+
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector,
+            query_filter=query_filter,
             limit=limit,
             with_payload=True
         )
 
-        # 3. Format the results nicely
+        # will have to make displaying as a search with tag,
+        # be able to search the tag and show all entries under it
+
         results = []
         for hit in response.points:
             results.append({
                 "id": hit.id,
-                "score": hit.score,  # How similar it is (closer to 1.0 is better)
+                "score": hit.score,
                 "payload": hit.payload
             })
 
