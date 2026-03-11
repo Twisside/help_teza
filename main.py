@@ -1,7 +1,8 @@
-﻿import os
+﻿import atexit
+import os
 import subprocess
 import time
-
+import requests
 from flask import Flask, render_template, request, redirect, url_for
 from werkzeug.utils import secure_filename
 
@@ -114,25 +115,15 @@ def readdb(collection):
 
 
 # -------------------------------------
-import atexit
-
-# Shutdown for the db, just to keep all safe and
-# without any risks of crashing it
-def shutdown():
-    if hasattr(db, 'client') and db.client:
-        print("Closing database connection...")
-        db.client.close()
-
-atexit.register(shutdown)
-
-# -------------------------------------
-
-
 
 # LM Studio CLI Integration
 
 # Feature flag for your future model.
 # Once you download a model (e.g., 'lms get qwen3-coder'), put its name here.
+
+#  TODO:
+#   Will make a select menu of models in the future
+
 TARGET_MODEL = os.getenv("TARGET_MODEL")
 
 def start_lm_studio():
@@ -160,6 +151,60 @@ def start_lm_studio():
         print(f"\nERROR: Failed to load model {TARGET_MODEL}. Is it downloaded?\nDetails: {e}\n")
 
 
+@app.route('/ask', methods=['POST'])
+def ask_ai():
+    user_query = request.form.get('question')
+    if not user_query:
+        return redirect(url_for('home'))
+
+    # 1. RETRIEVE: Get the most relevant chunks from Qdrant
+    # Limit to 3 to avoid overwhelming the SLM's context window
+    search_results = db.search("user_entries", user_query, limit=3)
+
+    # 2. AUGMENT: Combine the retrieved chunks into a single text block
+    context_texts = [res['payload']['content'] for res in search_results]
+    context_string = "\n\n---\n\n".join(context_texts)
+
+    # 3. GENERATE: Build the prompt and send it to LM Studio
+    system_prompt = "You are a helpful assistant. Answer the user's question based ONLY on the provided context. If the answer is not in the context, say 'I don't know based on my current documents.'"
+
+    user_prompt = f"Context:\n{context_string}\n\nQuestion: {user_query}"
+
+    lm_studio_url = "http://127.0.0.1:1234/v1/chat/completions"
+    payload = {
+        "model": os.getenv("TARGET_MODEL"), # LM Studio ignores this name but requires the field
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.3 # Keep it low so the model sticks strictly to the facts
+    }
+
+    try:
+        response = requests.post(lm_studio_url, json=payload)
+
+        # 2. Check for errors and grab the EXACT message from LM Studio
+        if response.status_code != 200:
+            ai_answer = f"LM Studio rejected the request. Details: {response.text}"
+        else:
+            ai_answer = response.json()['choices'][0]['message']['content']
+
+    except requests.exceptions.RequestException as e:
+        ai_answer = f"Network Error connecting to LM Studio: {e}"
+
+    # Fetch all entries to keep the main list populated
+    all_entries = db.get_all("user_entries")
+
+    return render_template(
+        'home.html',
+        entries=all_entries,
+        is_search=False,
+        ai_answer=ai_answer,
+        user_query=user_query,
+        retrieved_context=search_results
+    )
+
+
 # Update your existing shutdown behavior to also kill the LM Studio server
 def shutdown():
     if hasattr(db, 'client') and db.client:
@@ -179,4 +224,7 @@ atexit.register(shutdown)
 # =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=--=-=-=-=-=-=-=-=--=-=-
 
 if __name__ == "__main__":
+
+    start_lm_studio()
+
     app.run(debug=True, use_reloader=False)

@@ -89,6 +89,34 @@
         </form>
     </div>
 
+    <div class="panel" style="border-left: 5px solid #16a34a;">
+        <h3>3. Ask the AI</h3>
+        <form method="POST" action="/ask">
+            <input type="text" name="question" placeholder="Ask a question about your documents..." required style="width: 75%;">
+            <button type="submit" style="background: #16a34a;">Generate Answer</button>
+        </form>
+
+        {% if ai_answer %}
+            <div style="background: white; padding: 15px; border-radius: 6px; margin-top: 20px; border: 1px solid #16a34a;">
+                <h4 style="margin-top: 0; color: #16a34a;">AI Response to: "{{ user_query }}"</h4>
+                <p style="white-space: pre-wrap;">{{ ai_answer }}</p>
+
+                <details style="margin-top: 15px; font-size: 13px; color: #666;">
+                    <summary style="cursor: pointer;">View Context Used</summary>
+                    <ul style="padding-left: 20px;">
+                        {% for ctx in retrieved_context %}
+                            <li>
+                                <strong>Score {{ ctx.score|round(2) }}</strong>
+                                (File: {{ ctx.payload.filename if ctx.payload.filename else 'Manual Entry' }}):
+                                "{{ ctx.payload.content | truncate(100) }}"
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </details>
+            </div>
+        {% endif %}
+    </div>
+
     <h3>{% if is_search %}Search Results{% else %}All Database Entries{% endif %}</h3>
 
     {% for item in entries %}
