@@ -5,7 +5,7 @@ import time
 import requests
 from flask import Flask, render_template, request, redirect, url_for
 from werkzeug.utils import secure_filename
-
+from chunker import DocumentChunker
 from database import QdrantRepo
 
 
@@ -20,8 +20,10 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 # -=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---
 
 
-db = QdrantRepo(use_qwen=True) #8187
+db = QdrantRepo(use_qwen=False) #8187
 db.connect()
+
+doc_chunker = DocumentChunker()
 
 
 @app.route('/', methods=['GET', 'POST'])
@@ -71,24 +73,36 @@ def upload_file():
     if file.filename == '':
         return redirect(url_for('home'))
 
+# ---------------------------there will be a better file system-----------------
     if file:
         filename = secure_filename(file.filename)
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
-
+# ------------------------------------------------------------------------------
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
 
-            db.insert("user_entries", {
-                "content": content,
-                "tags": tags_list, # Saved as a list here too
-                "filename": filename,
-                "filepath": filepath
-            })
-        except Exception as e:
-            print(f"Error reading file {filename}: {e}")
+            print(f"Chunking {filename} with hybrid paragraph chunker...")
+            # Here is where your new DocumentChunker class steps in!
+            text_chunks = doc_chunker.chunk_document(content)
+            print(f"Created {len(text_chunks)} chunks. Embedding now...")
 
+            for i, chunk in enumerate(text_chunks):
+                print(f"Embedding chunk {i + 1}/{len(text_chunks)}...")
+                # Save each chunk to Qdrant with the exact same metadata
+                db.insert("user_entries", {
+                    "content": chunk,
+                    "tags": tags_list,
+                    "filename": filename,
+                    "filepath": filepath,
+                    "chunk_index": i
+                })
+
+            print("Upload and embedding complete!")
+
+        except Exception as e:
+            print(f"Error reading or embedding file {filename}: {e}")
     return redirect(url_for('home'))
 
 @app.route('/db/update/<collection>/<item_id>', methods=['POST'])

@@ -1,19 +1,24 @@
 ﻿import math
 import re
+from transformers import AutoTokenizer
+import sentencepiece
 
+# Use the base repo for the tokenizer metadata
+tokenizer = AutoTokenizer.from_pretrained("mistralai/Ministral-3-14B-Instruct-2512")
 
 class DocumentChunker:
-    def __init__(self, max_tokens=500, overlap_tokens=50):
+    def __init__(self, max_tokens=1000, overlap_tokens=100):
         self.max_tokens = max_tokens
         self.overlap_tokens = overlap_tokens
 
-    def count_tokens(self, text: str) -> int:
-        """Approximation: 1 token is roughly 4 characters in English."""
-        return len(text) // 4
+    def count_tokens(self, paragraph: str) -> int:
+        """
+        Translates a string of text into AI tokens and returns the exact count.
+        """
+        token_ids = tokenizer.encode(paragraph)
+        return len(token_ids)
 
     def chunk_document(self, text: str) -> list[str]:
-        """Main entry point: Splits by paragraph first."""
-        # Normalize line endings and split by double line breaks
         paragraphs = re.split(r'\n\s*\n', text.strip())
         final_chunks = []
 
@@ -23,36 +28,29 @@ class DocumentChunker:
                 continue
 
             if self.count_tokens(p) <= self.max_tokens:
-                # Perfect size, add it directly
                 final_chunks.append(p)
             else:
-                # Paragraph is too big, apply fallback logic
                 final_chunks.extend(self._fallback_sentence_split(p))
 
         return final_chunks
 
     def _fallback_sentence_split(self, text: str) -> list[str]:
-        """Attempts to split a massive paragraph by sentences."""
-        # Simple regex to split by period, question mark, or exclamation point
         sentences = re.split(r'(?<=[.!?]) +', text)
         chunks = []
         current_chunk = ""
 
         for sentence in sentences:
-            # Check if this single sentence is an absolute monster
+
             if self.count_tokens(sentence) > self.max_tokens:
-                # If we have a pending chunk, save it first
                 if current_chunk:
                     chunks.append(current_chunk.strip())
                     current_chunk = ""
-                # Apply your exact mathematical splitting logic here
                 chunks.extend(self._hard_math_split(sentence))
                 continue
 
-            # Will adding this sentence push us over the limit?
             if self.count_tokens(current_chunk + " " + sentence) > self.max_tokens:
                 chunks.append(current_chunk.strip())
-                current_chunk = sentence  # Start a new chunk
+                current_chunk = sentence
             else:
                 current_chunk += " " + sentence if current_chunk else sentence
 
@@ -62,15 +60,11 @@ class DocumentChunker:
         return chunks
 
     def _hard_math_split(self, text: str) -> list[str]:
-        """Your mathematical splitting logic for unbreakable text walls."""
+
         total_tokens = self.count_tokens(text)
-
-        # Calculate exactly how many chunks we need (your logic)
         num_chunks = math.ceil(total_tokens / self.max_tokens)
-
-        # Find the mathematical target size per chunk
         target_tokens = math.ceil(total_tokens / num_chunks)
-        target_chars = target_tokens * 4  # Convert back to character approximation
+        target_chars = target_tokens * 4
         overlap_chars = self.overlap_tokens * 4
 
         chunks = []
@@ -79,15 +73,12 @@ class DocumentChunker:
 
         while start < text_length:
             end = start + target_chars
-
-            # Try to snap the cut to the nearest space so we don't slice a word in half
             if end < text_length:
                 last_space = text.rfind(' ', start, end)
                 if last_space != -1:
                     end = last_space
 
             chunks.append(text[start:end].strip())
-            # Move forward, but step back slightly for the overlap
             start = end - overlap_chars
 
         return chunks

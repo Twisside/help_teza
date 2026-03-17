@@ -66,7 +66,7 @@ class MongoRepo(DatabaseInterface):
 
 
 class QdrantRepo(DatabaseInterface):
-    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cpu"):
+    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cuda"):
         self.path = storage_path
         self.client = None
         self.device = device

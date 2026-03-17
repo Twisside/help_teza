@@ -14,7 +14,7 @@ class EmbeddingService(ABC):
 
 
 class GemmaEmbeddingService(EmbeddingService):
-    def __init__(self, model_name="google/embeddinggemma-300m", device="cpu"):
+    def __init__(self, model_name="google/embeddinggemma-300m", device="cuda"):
         # Note: Gemma-300M might require a HuggingFace login (token)
         # to download due to its license.
         self.model = SentenceTransformer(model_name, device=device)
@@ -31,7 +31,7 @@ class GemmaEmbeddingService(EmbeddingService):
 
 
 class QwenEmbeddingService(EmbeddingService):
-    def __init__(self, model_name="Qwen/Qwen3-Embedding-0.6B", device="cpu"):
+    def __init__(self, model_name="Qwen/Qwen3-Embedding-0.6B", device="cuda"):
         self.model = SentenceTransformer(model_name, device=device)
         self._dim = 1024  # Default dimension for Qwen3-0.6B
 
