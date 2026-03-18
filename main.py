@@ -68,6 +68,9 @@ def upload_file():
     raw_tags = request.form.get('tags', '')
     tags_list = [t.strip() for t in raw_tags.split(',') if t.strip()]
     if not tags_list:
+
+        #TODO:
+        # Add automatic tagging
         tags_list = ['untagged']
 
     if file.filename == '':
@@ -172,11 +175,14 @@ def ask_ai():
         return redirect(url_for('home'))
 
     # 1. RETRIEVE: Get the most relevant chunks from Qdrant
-    # Limit to 3 to avoid overwhelming the SLM's context window
-    search_results = db.search("user_entries", user_query, limit=3)
+    # Limiting the resources if the score is to low, but if the low score id the highest, use them
+    # 1. Get initial results
+    search_results = db.search("user_entries", user_query, limit=5)
+    high_quality = [res for res in search_results if res['score'] > 0.5]
+    new_results = high_quality if len(high_quality) >= 3 else search_results[:3]
 
     # 2. AUGMENT: Combine the retrieved chunks into a single text block
-    context_texts = [res['payload']['content'] for res in search_results]
+    context_texts = [res['payload']['content'] for res in new_results]
     context_string = "\n\n---\n\n".join(context_texts)
 
     # 3. GENERATE: Build the prompt and send it to LM Studio
@@ -215,7 +221,7 @@ def ask_ai():
         is_search=False,
         ai_answer=ai_answer,
         user_query=user_query,
-        retrieved_context=search_results
+        retrieved_context=new_results
     )
 
 
