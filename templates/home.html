@@ -48,6 +48,24 @@
         .actions { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #eee; }
         .delete-link { color: #dc2626; text-decoration: none; margin-left: 10px; font-size: 14px; }
     </style>
+    <style>
+        #directory-tree-container {
+        max-height: 300px;
+        overflow-y: auto;
+        background: #ffffff;
+        padding: 15px;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        margin-top: 10px;
+    }
+
+    /* Customizing jsTree to look more modern */
+    .jstree-default .jstree-clicked {
+        background: #e0e7ff !important;
+        border-radius: 4px;
+        box-shadow: none !important;
+    }
+    </style>
 </head>
 <body>
     <div id="loading-overlay">
@@ -58,7 +76,7 @@
     <h2>Local RAG Assistant Interface</h2>
 
     <div class="panel">
-        <h3>1. Add Knowledge</h3>
+        <h3>Add Knowledge</h3>
 
         <form method="POST" action="/" style="margin-bottom: 20px;">
             <strong>Manual Entry:</strong><br>
@@ -89,6 +107,51 @@
         </form>
     </div>
 
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/themes/default/style.min.css" />
+
+
+    <div class="panel">
+        <h3>Directory Selector</h3>
+        <p>Select the folders you want the RAG system to index:</p>
+        <div id="directory-tree-container">
+            <div id="directory_tree">Loading folder structure...</div>
+        </div>
+        <button id="save-directories" style="margin-top: 15px; background: #3730a3;">Confirm Selection</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/jstree.min.js"></script>
+    <script>
+        $(function () {
+            // Initialize the tree
+            $('#directory_tree').jstree({
+                'core': {
+                    'data': {
+                        'url': '/api/get_directory_tree',
+                        'dataType': 'json'
+                    }
+                },
+                'plugins': ["checkbox", "types"],
+                'types': {
+                    'default': { 'icon': 'jstree-folder' }
+                }
+            });
+
+            // Handle the Save button
+            $('#save-directories').on('click', function() {
+                var selectedNodes = $('#directory_tree').jstree("get_selected", true);
+                var paths = selectedNodes.map(node => node.id);
+
+                fetch('/api/save_selected_dirs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paths: paths })
+                })
+                .then(response => response.json())
+                .then(data => alert("Directories saved! Ready for indexing later."));
+            });
+        });
+    </script>
     <div class="panel" style="border-left: 5px solid #16a34a;">
         <h3>3. Ask the AI</h3>
         <form method="POST" action="/ask">

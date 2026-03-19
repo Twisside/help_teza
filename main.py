@@ -3,11 +3,11 @@ import os
 import subprocess
 import time
 import requests
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, jsonify
 from werkzeug.utils import secure_filename
 from chunker import DocumentChunker
 from database import QdrantRepo
-
+from file_manager import FileManager
 
 
 app = Flask(__name__)
@@ -129,6 +129,26 @@ def readdb(collection):
     entries = db.get_all(collection)
 
     return entries
+
+
+# ----------== File Manage ==--------------
+
+
+
+# Initialize the manager
+file_mgr = FileManager()
+
+@app.route('/api/get_directory_tree')
+def get_directory_tree():
+    # Simply call the manager
+    tree_data = file_mgr.get_directory_json()
+    return jsonify(tree_data)
+
+@app.route('/api/save_selected_dirs', methods=['POST'])
+def save_dirs():
+    selected_paths = request.json.get('paths', [])
+    success = file_mgr.save_selected_config(selected_paths)
+    return jsonify({"status": "success" if success else "error"})
 
 
 # -------------------------------------
