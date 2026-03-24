@@ -3,6 +3,10 @@ import re
 from transformers import AutoTokenizer
 import sentencepiece
 
+
+# TODO:
+#  find a dynamic way to switch model by model used
+
 # Use the base repo for the tokenizer metadata
 tokenizer = AutoTokenizer.from_pretrained("mistralai/Ministral-3-14B-Instruct-2512")
 
@@ -24,7 +28,8 @@ class DocumentChunker:
 
         for p in paragraphs:
             p = p.strip()
-            if not p:
+            # either empty or a few words long
+            if not p or len(p.split(' ')) <= 3:
                 continue
 
             if self.count_tokens(p) <= self.max_tokens:

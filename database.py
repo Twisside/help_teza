@@ -70,16 +70,17 @@ class QdrantRepo(DatabaseInterface):
         self.path = storage_path
         self.client = None
         self.device = device
+        self.collection_name = "user_entries_qwen"
 
         # Manual Switch Logic
         if use_qwen:
             print("Initializing Qwen3-Embedding-0.6B...")
             self.embedder = QwenEmbeddingService(device=self.device)
-            self.collection_name = "user_entries_qwen"
+            #self.collection_name = "user_entries_qwen"
         else:
             print("Initializing EmbeddingGemma-300M...")
             self.embedder = GemmaEmbeddingService(device=self.device)
-            self.collection_name = "user_entries_gemma"
+            #self.collection_name = "user_entries_qwen"
 
 
     def connect(self):
@@ -181,8 +182,9 @@ class QdrantRepo(DatabaseInterface):
             with_payload=True
         )
 
-        # will have to make displaying as a search with tag,
-        # be able to search the tag and show all entries under it
+        # TODO:
+        #  will have to make displaying as a search with tag,
+        #  be able to search the tag and show all entries under it
 
         results = []
         for hit in response.points:
