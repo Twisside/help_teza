@@ -8,7 +8,7 @@ from werkzeug.utils import secure_filename
 from chunker import DocumentChunker
 from database import QdrantRepo
 from file_manager import FileManager
-
+from index_worker import UniversalBackgroundIndexer
 
 app = Flask(__name__)
 
@@ -144,11 +144,77 @@ def get_directory_tree():
     tree_data = file_mgr.get_directory_json()
     return jsonify(tree_data)
 
+
+@app.route('/api/index_directories', methods=['POST'])
+def index_directories():
+    selected_paths = request.json.get('paths', [])
+    if not selected_paths:
+        return jsonify({"status": "error", "message": "No paths selected"})
+
+    # 1. Get all file paths
+    files_to_index = file_mgr.get_all_files_from_paths(selected_paths)
+    indexed_count = 0
+
+    print(f"Starting bulk indexing of {len(files_to_index)} files...")
+
+    for filepath in files_to_index:
+        try:
+            filename = os.path.basename(filepath)
+
+            # Simple check: skip if file is too large or unreadable
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            if not content.strip():
+                continue
+
+            # 2. Chunking
+            # Using your existing doc_chunker
+            text_chunks = doc_chunker.chunk_document(content)
+
+            # 3. Embedding & Inserting
+            for i, chunk in enumerate(text_chunks):
+                db.insert("user_entries", {
+                    "content": chunk,
+                    "tags": ["auto-indexed", "local-system"],
+                    "filename": filename,
+                    "filepath": filepath,
+                    "chunk_index": i
+                })
+
+            indexed_count += 1
+            print(f"Indexed [{indexed_count}/{len(files_to_index)}]: {filename}")
+
+        except Exception as e:
+            print(f"Failed to index {filepath}: {e}")
+
+    return jsonify({
+        "status": "success",
+        "message": f"Successfully indexed {indexed_count} files."
+    })
+
+
 @app.route('/api/save_selected_dirs', methods=['POST'])
 def save_dirs():
     selected_paths = request.json.get('paths', [])
     success = file_mgr.save_selected_config(selected_paths)
     return jsonify({"status": "success" if success else "error"})
+
+
+# Initialize the worker
+bg_indexer = UniversalBackgroundIndexer(db, doc_chunker)
+
+@app.route('/api/indexer_status')
+def indexer_status():
+    return jsonify(bg_indexer.get_status())
+
+
+@app.route('/api/index_directories', methods=['POST'])
+def index_directories():
+    selected_paths = request.json.get('paths', [])
+    files = file_mgr.get_all_files_from_paths(selected_paths)
+    bg_indexer.add_to_queue(files)
+    return jsonify({"status": "success", "count": len(files)})
 
 
 # -------------------------------------

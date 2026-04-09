@@ -138,17 +138,37 @@
             });
 
             // Handle the Save button
+            // Handle the Index button
             $('#save-directories').on('click', function() {
                 var selectedNodes = $('#directory_tree').jstree("get_selected", true);
                 var paths = selectedNodes.map(node => node.id);
 
-                fetch('/api/save_selected_dirs', {
+                if (paths.length === 0) {
+                    alert("Please select at least one folder.");
+                    return;
+                }
+
+                // Show the loading overlay
+                document.getElementById('loading-overlay').style.display = 'block';
+                document.querySelector('.loading-text').innerText = "Indexing local directories... This may take a moment.";
+
+                fetch('/api/index_directories', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ paths: paths })
                 })
                 .then(response => response.json())
-                .then(data => alert("Directories saved! Ready for indexing later."));
+                .then(data => {
+                    document.getElementById('loading-overlay').style.display = 'none';
+                    alert(data.message);
+                    // Optional: refresh the page to show new entries
+                    window.location.reload();
+                })
+                .catch(err => {
+                    document.getElementById('loading-overlay').style.display = 'none';
+                    alert("An error occurred during indexing.");
+                    console.error(err);
+                });
             });
         });
     </script>
@@ -181,6 +201,32 @@
     </div>
 
     <h3>{% if is_search %}Search Results{% else %}All Database Entries{% endif %}</h3>
+
+    <div id="indexer-status-bar" style="display:none; background: #fffbeb; border: 1px solid #f59e0b; padding: 10px; border-radius: 6px; margin-bottom: 20px;">
+        <span id="status-text">Background indexing active...</span>
+        <strong id="queue-count">0</strong> files remaining.
+    </div>
+
+    <script>
+        function updateIndexerStatus() {
+            fetch('/api/indexer_status')
+                .then(res => res.json())
+                .then(data => {
+                    const bar = document.getElementById('indexer-status-bar');
+                    if (data.queue_size > 0) {
+                        bar.style.display = 'block';
+                        document.getElementById('queue-count').innerText = data.queue_size;
+                        document.getElementById('status-text').innerText = data.is_paused
+                            ? "Indexing paused (System Busy) - "
+                            : "Background indexing - ";
+                    } else {
+                        bar.style.display = 'none';
+                    }
+                });
+        }
+        // Check every 5 seconds
+        setInterval(updateIndexerStatus, 5000);
+    </script>
 
     {% for item in entries %}
         <div class="entry-card">
