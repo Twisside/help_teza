@@ -1,4 +1,5 @@
-﻿import uuid
+﻿from datetime import datetime
+import uuid
 from abc import ABC, abstractmethod
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
@@ -70,17 +71,17 @@ class QdrantRepo(DatabaseInterface):
         self.path = storage_path
         self.client = None
         self.device = device
-        self.collection_name = "user_entries_qwen"
+        self.tag_collection = "global_tags"
 
-        # Manual Switch Logic
+        # FIX: Make the collection name dynamic based on the model
         if use_qwen:
             print("Initializing Qwen3-Embedding-0.6B...")
             self.embedder = QwenEmbeddingService(device=self.device)
-            #self.collection_name = "user_entries_qwen"
+            self.collection_name = "user_entries_qwen_1024" # Specific name for Qwen
         else:
             print("Initializing EmbeddingGemma-300M...")
             self.embedder = GemmaEmbeddingService(device=self.device)
-            #self.collection_name = "user_entries_qwen"
+            self.collection_name = "user_entries_gemma_768" # Specific name for Gemma
 
 
     def connect(self):
@@ -95,12 +96,48 @@ class QdrantRepo(DatabaseInterface):
                     distance=models.Distance.COSINE
                 ),
             )
+        # Global Tag collection
+        if not self.client.collection_exists(self.tag_collection):
+            self.client.create_collection(
+                collection_name=self.tag_collection,
+                vectors_config=models.VectorParams(
+                    size=self.embedder.dimension,
+                    distance=models.Distance.COSINE
+                )
+            )
         return self.client
 
 
+    def get_semantic_tags(self, text_embedding, threshold=0.8):
+        """Finds existing tags that match the text context."""
+        results = self.client.query_points(
+            collection_name=self.tag_collection,
+            query=text_embedding,
+            limit=5,
+            score_threshold=threshold
+        )
+        return [hit.payload['tag_name'] for hit in results.points]
+
+    def add_new_tag(self, tag_name):
+        """Adds a new tag string to the global registry."""
+        vector = self.embedder.embed_text(tag_name)
+        self.client.upsert(
+            collection_name=self.tag_collection,
+            points=[models.PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={"tag_name": tag_name}
+            )]
+        )
+
+
     def insert(self, collection, data):
-        # We override the 'collection' argument with our model-specific one
         target_col = self.collection_name
+
+        # --- NEW: Add Timestamp ---
+        # Using ISO format for clean sorting and human readability
+        if "timestamp" not in data:
+            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         text_to_embed = data.get("content", "")
         vector = self.embedder.embed_text(text_to_embed)
@@ -110,34 +147,22 @@ class QdrantRepo(DatabaseInterface):
             vector=vector,
             payload=data
         )
-
-        return self.client.upsert(
-            collection_name=target_col,
-            points=[point]
-        )
-
+        return self.client.upsert(collection_name=target_col, points=[point])
 
     def update(self, collection, item_id, new_data):
         target_col = self.collection_name
+
+        # --- NEW: Update Timestamp on edit ---
+        new_data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if "content" in new_data:
             new_vector = self.embedder.embed_text(new_data["content"])
             return self.client.upsert(
                 collection_name=target_col,
-                points=[
-                    models.PointStruct(
-                        id=item_id,
-                        vector=new_vector,
-                        payload=new_data
-                    )
-                ]
+                points=[models.PointStruct(id=item_id, vector=new_vector, payload=new_data)]
             )
 
-        return self.client.set_payload(
-            collection_name=target_col,
-            payload=new_data,
-            points=[item_id]
-        )
+        return self.client.set_payload(collection_name=target_col, payload=new_data, points=[item_id])
 
 
     def get_all(self, collection):

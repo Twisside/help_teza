@@ -2,6 +2,8 @@
 import os
 import subprocess
 import time
+from datetime import datetime
+
 import requests
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from werkzeug.utils import secure_filename
@@ -145,55 +147,6 @@ def get_directory_tree():
     return jsonify(tree_data)
 
 
-@app.route('/api/index_directories', methods=['POST'])
-def index_directories():
-    selected_paths = request.json.get('paths', [])
-    if not selected_paths:
-        return jsonify({"status": "error", "message": "No paths selected"})
-
-    # 1. Get all file paths
-    files_to_index = file_mgr.get_all_files_from_paths(selected_paths)
-    indexed_count = 0
-
-    print(f"Starting bulk indexing of {len(files_to_index)} files...")
-
-    for filepath in files_to_index:
-        try:
-            filename = os.path.basename(filepath)
-
-            # Simple check: skip if file is too large or unreadable
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-
-            if not content.strip():
-                continue
-
-            # 2. Chunking
-            # Using your existing doc_chunker
-            text_chunks = doc_chunker.chunk_document(content)
-
-            # 3. Embedding & Inserting
-            for i, chunk in enumerate(text_chunks):
-                db.insert("user_entries", {
-                    "content": chunk,
-                    "tags": ["auto-indexed", "local-system"],
-                    "filename": filename,
-                    "filepath": filepath,
-                    "chunk_index": i
-                })
-
-            indexed_count += 1
-            print(f"Indexed [{indexed_count}/{len(files_to_index)}]: {filename}")
-
-        except Exception as e:
-            print(f"Failed to index {filepath}: {e}")
-
-    return jsonify({
-        "status": "success",
-        "message": f"Successfully indexed {indexed_count} files."
-    })
-
-
 @app.route('/api/save_selected_dirs', methods=['POST'])
 def save_dirs():
     selected_paths = request.json.get('paths', [])
@@ -206,17 +159,32 @@ bg_indexer = UniversalBackgroundIndexer(db, doc_chunker)
 
 @app.route('/api/indexer_status')
 def indexer_status():
-    return jsonify(bg_indexer.get_status())
+    status = bg_indexer.get_status()
+    # It's important to return it as JSON
+    return jsonify(status)
 
 
 @app.route('/api/index_directories', methods=['POST'])
 def index_directories():
     selected_paths = request.json.get('paths', [])
+
+    # Ensure this method exists in your file_manager.py!
     files = file_mgr.get_all_files_from_paths(selected_paths)
+
     bg_indexer.add_to_queue(files)
-    return jsonify({"status": "success", "count": len(files)})
+
+    # Add the "message" key here so JS can find it
+    return jsonify({
+        "status": "success",
+        "count": len(files),
+        "message": f"Added {len(files)} files to the background indexing queue."
+    })
 
 
+@app.route('/api/toggle_pause', methods=['POST'])
+def toggle_pause():
+    bg_indexer.manual_pause = not bg_indexer.manual_pause
+    return jsonify({"paused": bg_indexer.manual_pause})
 # -------------------------------------
 
 # LM Studio CLI Integration
@@ -260,6 +228,9 @@ def ask_ai():
     if not user_query:
         return redirect(url_for('home'))
 
+    # We include the day of the week because it helps the AI with "last Friday" etc.
+    now = datetime.now().strftime("%A, %B %d, %Y, %H:%M:%S")
+
     # 1. RETRIEVE: Get the most relevant chunks from Qdrant
     # Limiting the resources if the score is to low, but if the low score id the highest, use them
     # 1. Get initial results
@@ -267,13 +238,27 @@ def ask_ai():
     high_quality = [res for res in search_results if res['score'] > 0.5]
     new_results = high_quality if len(high_quality) >= 3 else search_results[:3]
 
-    # 2. AUGMENT: Combine the retrieved chunks into a single text block
-    context_texts = [res['payload']['content'] for res in new_results]
-    context_string = "\n\n---\n\n".join(context_texts)
+    # 2. AUGMENT: Include the date in the context string
+    context_items = []
+    for res in new_results:
+        content = res['payload']['content']
+        date = res['payload'].get('timestamp', 'Unknown Date')
+        source = res['payload'].get('filename', 'Manual Entry')
 
-    # 3. GENERATE: Build the prompt and send it to LM Studio
-    system_prompt = "You are a helpful assistant. Answer the user's question based ONLY on the provided context. If the answer is not in the context, say 'I don't know based on my current documents.'"
+        # Formatting each chunk so the AI sees the metadata
+        formatted_chunk = f"[Recorded on: {date}] [Source: {source}]\nContent: {content}"
+        context_items.append(formatted_chunk)
 
+    context_string = "\n\n---\n\n".join(context_items)
+
+    # 3. GENERATE: Adjust system prompt to respect dates
+    system_prompt = (
+        f"You are a helpful assistant. The current date and time is {now}. Answer the user's question based ONLY on the provided context. "
+        "Pay attention to the dates provided in the context; if there is conflicting information, "
+        "prioritize the most recent entry unless asked otherwise."
+        "Use the current date as an anchor to resolve relative time references "
+        "like 'yesterday', 'last week', or 'today' when looking at context timestamps."
+    )
     user_prompt = f"Context:\n{context_string}\n\nQuestion: {user_query}"
 
     lm_studio_url = "http://127.0.0.1:1234/v1/chat/completions"
