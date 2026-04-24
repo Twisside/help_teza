@@ -3,3 +3,6 @@ Flask
 qdrant-client
 python-dotenv
 sentence-transformers
+psutil
+datetime
+requests

@@ -3,34 +3,63 @@ import re
 from transformers import AutoTokenizer
 import sentencepiece
 
-# Use the base repo for the tokenizer metadata
-tokenizer = AutoTokenizer.from_pretrained("mistralai/Ministral-3-14B-Instruct-2512")
+
+# TODO:
+#  find a dynamic way to switch model by model used
+
+model_id = "google/gemma-3-4b-it"
 
 class DocumentChunker:
-    def __init__(self, max_tokens=1000, overlap_tokens=100):
+    def __init__(self, model_name="mistralai/Ministral-3-14B-Instruct-2512", max_tokens=1000, overlap_tokens=100):
         self.max_tokens = max_tokens
         self.overlap_tokens = overlap_tokens
 
-    def count_tokens(self, paragraph: str) -> int:
-        """
-        Translates a string of text into AI tokens and returns the exact count.
-        """
-        token_ids = tokenizer.encode(paragraph)
-        return len(token_ids)
+        # This is the "Automation"
+        print(f"Loading tokenizer for: {model_name}")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+    def count_tokens(self, text: str) -> int:
+        return len(self.tokenizer.encode(text))
 
     def chunk_document(self, text: str) -> list[str]:
+        # Split by double newlines to find paragraphs
         paragraphs = re.split(r'\n\s*\n', text.strip())
         final_chunks = []
+
+        # This buffer will hold small paragraphs until we hit a big one
+        small_paragraph_buffer = []
 
         for p in paragraphs:
             p = p.strip()
             if not p:
                 continue
 
-            if self.count_tokens(p) <= self.max_tokens:
-                final_chunks.append(p)
+            # Define "small" as 3 words or fewer
+            word_count = len(p.split())
+
+            if word_count <= 3:
+                # Accumulate small paragraphs (like headers or titles)
+                small_paragraph_buffer.append(p)
             else:
-                final_chunks.extend(self._fallback_sentence_split(p))
+                # We found a "big" paragraph!
+                # Combine it with whatever was in the buffer
+                if small_paragraph_buffer:
+                    combined_text = "\n".join(small_paragraph_buffer) + "\n" + p
+                    small_paragraph_buffer = [] # Clear the buffer
+                else:
+                    combined_text = p
+
+                # Now process the combined text normally
+                if self.count_tokens(combined_text) <= self.max_tokens:
+                    final_chunks.append(combined_text)
+                else:
+                    # If the combined block is too big, use the fallback sentence splitter
+                    final_chunks.extend(self._fallback_sentence_split(combined_text))
+
+        # If the document ends with small paragraphs (and no big one follows)
+        # we don't want to lose them, so we add them as a final chunk.
+        if small_paragraph_buffer:
+            final_chunks.append("\n".join(small_paragraph_buffer))
 
         return final_chunks
 

@@ -4,111 +4,118 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Local RAG Assistant</title>
-    <style>
-        /* Loading Overlay Styles */
-        #loading-overlay {
-            display: none; /* Hidden by default */
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255, 255, 255, 0.8);
-            z-index: 1000;
-            text-align: center;
-            padding-top: 20vh;
-        }
-        .spinner {
-            border: 8px solid #f3f3f3;
-            border-top: 8px solid #0066cc;
-            border-radius: 50%;
-            width: 60px; height: 60px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px auto;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .loading-text {
-            font-size: 1.2em;
-            color: #333;
-            font-weight: bold;
-        }
 
-        body { font-family: system-ui, -apple-system, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; color: #333; line-height: 1.6; }
-        .panel { background: #f9f9f9; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd; }
-        .panel h3 { margin-top: 0; border-bottom: 2px solid #eee; padding-bottom: 10px; }
-        input[type="text"], input[type="file"] { padding: 8px; margin-right: 10px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; width: calc(50% - 20px); }
-        input[type="file"] { width: auto; }
-        button { padding: 8px 16px; background: #0066cc; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    <style>
+        /* General Layout */
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; color: #333; line-height: 1.6; background-color: #f0f2f5; }
+        .panel { background: #ffffff; padding: 25px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #e1e4e8; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        .panel h3 { margin-top: 0; border-bottom: 2px solid #f0f2f5; padding-bottom: 12px; color: #1a1a1a; }
+
+        /* Forms & Inputs */
+        input[type="text"], input[type="file"] { padding: 10px; margin-bottom: 10px; border: 1px solid #ddd; border-radius: 6px; width: 100%; box-sizing: border-box; }
+        button { padding: 10px 20px; background: #0066cc; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; transition: background 0.2s; }
         button:hover { background: #0052a3; }
-        .btn-clear { background: #666; text-decoration: none; padding: 8px 16px; color: white; border-radius: 4px; display: inline-block; font-size: 14px;}
-        .entry-card { border: 1px solid #eee; padding: 15px; border-radius: 6px; margin-bottom: 15px; background: white; }
-        .tag-badge { background: #e0e7ff; color: #3730a3; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; display: inline-block; margin-bottom: 10px;}
-        .file-info { font-size: 12px; color: #666; background: #f1f1f1; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-bottom: 10px; }
-        .score { color: #16a34a; font-size: 13px; font-weight: bold; margin-bottom: 10px;}
-        .actions { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #eee; }
-        .delete-link { color: #dc2626; text-decoration: none; margin-left: 10px; font-size: 14px; }
+        .btn-clear { background: #6c757d; text-decoration: none; padding: 10px 20px; color: white; border-radius: 6px; display: inline-block; font-size: 14px; }
+
+        /* Knowledge Cards */
+        .entry-card { border: 1px solid #eee; padding: 20px; border-radius: 10px; margin-bottom: 15px; background: white; transition: transform 0.1s; }
+        .entry-card:hover { border-color: #0066cc; }
+        .tag-badge { background: #e0e7ff; color: #3730a3; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: bold; display: inline-block; margin-right: 5px; text-transform: uppercase; }
+        .file-info { font-size: 12px; color: #666; background: #f8f9fa; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-bottom: 10px; border: 1px solid #eee; }
+        .score { color: #16a34a; font-size: 13px; font-weight: bold; margin-bottom: 10px; }
+        .actions { margin-top: 15px; padding-top: 15px; border-top: 1px solid #f0f2f5; display: flex; align-items: center; justify-content: space-between; }
+        .delete-link { color: #dc2626; text-decoration: none; font-size: 14px; font-weight: 500; }
+
+        /* Directory Tree */
+        #directory-tree-container { max-height: 350px; overflow-y: auto; background: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
+
+        /* Loading Overlay */
+        #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 255, 255, 0.9); z-index: 9999; text-align: center; padding-top: 20vh; }
+        .spinner { border: 6px solid #f3f3f3; border-top: 6px solid #0066cc; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Persistent Indexer Status Bar */
+        #indexer-status-bar { display: none; background: #fffbeb; border: 1px solid #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
     </style>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/themes/default/style.min.css" />
 </head>
 <body>
+
     <div id="loading-overlay">
         <div class="spinner"></div>
-        <div class="loading-text">Extracting and embedding file... Please wait.</div>
+        <div class="loading-text" style="font-weight: bold; font-size: 1.2em;">Processing...</div>
     </div>
 
-    <h2>Local RAG Assistant Interface</h2>
+    <h2>Local RAG Assistant</h2>
 
     <div class="panel">
-        <h3>1. Add Knowledge</h3>
+        <h3>Add Knowledge</h3>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <form method="POST" action="/">
+                <strong>Manual Text Entry</strong>
+                <input type="text" name="user_input" placeholder="Type knowledge here..." required>
+                <input type="text" name="tags" placeholder="Tags (comma separated)">
+                <button type="submit">Add Entry</button>
+            </form>
 
-        <form method="POST" action="/" style="margin-bottom: 20px;">
-            <strong>Manual Entry:</strong><br>
-            <input type="text" name="user_input" placeholder="Type new knowledge here..." required style="width: 60%;">
-            <input type="text" name="tags" placeholder="Tags (e.g., idea, draft)" style="width: 25%;">
-            <button type="submit">Add Text</button>
-        </form>
-
-        <form id="upload-form" action="/upload" method="POST" enctype="multipart/form-data">
-            <strong>Upload Document:</strong><br>
-            <input type="file" name="file" accept=".txt" required>
-            <input type="text" name="tags" placeholder="Tags (e.g., finance, 2026)">
-            <button type="submit">Upload & Embed</button>
-        </form>
+            <form id="upload-form" action="/upload" method="POST" enctype="multipart/form-data">
+                <strong>Upload File (.txt)</strong>
+                <input type="file" name="file" accept=".txt" required>
+                <input type="text" name="tags" placeholder="Tags (e.g. finance, thesis)">
+                <button type="submit" style="background: #28a745;">Upload & Index</button>
+            </form>
+        </div>
     </div>
 
-
     <div class="panel">
-    <!--need to make tags searchable and show all entries by tag -->
-        <h3> Search Knowledge Base</h3>
-        <form method="GET" action="/">
-            <input type="text" name="search" placeholder="Search by meaning or context..." value="{{ request.args.get('search', '') }}" style="width: 60%;">
-            <input type="text" name="search_tags" placeholder="Filter by tags (e.g., AI, local)" value="{{ request.args.get('search_tags', '') }}" style="width: 25%;">
-            <button type="submit">Search</button>
-            {% if is_search %}
-                <a href="/" class="btn-clear">Clear</a>
-            {% endif %}
-        </form>
+        <h3>Local Folder Indexing</h3>
+        <p style="font-size: 0.9em; color: #666;">Select folders to crawl and index in the background.</p>
+        <div id="directory-tree-container">
+            <div id="directory_tree">Loading folders...</div>
+        </div>
+        <button id="save-directories" style="margin-top: 15px; background: #4f46e5;">Index Selected Folders</button>
+    </div>
+
+    <div id="indexer-status-bar">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="flex-grow: 1;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <span id="status-icon" style="height: 12px; width: 12px; background: #16a34a; border-radius: 50%; display: inline-block;"></span>
+                    <span id="status-text" style="font-weight: bold; color: #92400e;">Background Indexer Active</span>
+                </div>
+                <div id="mode-text" style="font-size: 0.85em; color: #b45309; margin-top: 4px;">Mode: Normal (60% Limit)</div>
+            </div>
+            <div style="text-align: right; border-left: 1px solid #fcd34d; padding-left: 20px;">
+                <div style="font-size: 0.9em; color: #b45309;">Queue Status</div>
+                <div style="font-size: 1.4em; font-weight: bold; color: #78350f;">
+                    <span id="queue-count">0</span> <span style="font-size: 0.6em; font-weight: normal;">files left</span>
+                </div>
+                <button id="pause-btn" onclick="togglePause()" style="margin-top: 8px; background: #dc2626; padding: 6px 12px; font-size: 12px; width: 120px;">Pause Indexer</button>
+            </div>
+        </div>
     </div>
 
     <div class="panel" style="border-left: 5px solid #16a34a;">
-        <h3>3. Ask the AI</h3>
+        <h3>Ask your Documents</h3>
         <form method="POST" action="/ask">
-            <input type="text" name="question" placeholder="Ask a question about your documents..." required style="width: 75%;">
-            <button type="submit" style="background: #16a34a;">Generate Answer</button>
+            <input type="text" name="question" placeholder="What is mentioned about...?" required>
+            <button type="submit" style="background: #16a34a; width: 100%;">Generate AI Response</button>
         </form>
 
         {% if ai_answer %}
-            <div style="background: white; padding: 15px; border-radius: 6px; margin-top: 20px; border: 1px solid #16a34a;">
-                <h4 style="margin-top: 0; color: #16a34a;">AI Response to: "{{ user_query }}"</h4>
-                <p style="white-space: pre-wrap;">{{ ai_answer }}</p>
+            <div style="background: #f0fff4; padding: 20px; border-radius: 8px; margin-top: 20px; border: 1px solid #c6f6d5;">
+                <h4 style="margin-top: 0; color: #22543d;">AI Answer:</h4>
+                <p style="white-space: pre-wrap; color: #2d3748;">{{ ai_answer }}</p>
 
-                <details style="margin-top: 15px; font-size: 13px; color: #666;">
-                    <summary style="cursor: pointer;">View Context Used</summary>
-                    <ul style="padding-left: 20px;">
+                <details style="margin-top: 15px;">
+                    <summary style="cursor: pointer; font-size: 13px; color: #4a5568;">View Source Context</summary>
+                    <ul style="font-size: 12px; color: #718096; margin-top: 10px;">
                         {% for ctx in retrieved_context %}
                             <li>
-                                <strong>Score {{ ctx.score|round(2) }}</strong>
-                                (File: {{ ctx.payload.filename if ctx.payload.filename else 'Manual Entry' }}):
-                                "{{ ctx.payload.content | truncate(100) }}"
+                                <strong>[Score {{ ctx.score|round(2) }}]</strong>
+                                <small>({{ ctx.payload.timestamp }})</small>:
+                                {{ ctx.payload.content | truncate(150) }}
                             </li>
                         {% endfor %}
                     </ul>
@@ -117,48 +124,137 @@
         {% endif %}
     </div>
 
-    <h3>{% if is_search %}Search Results{% else %}All Database Entries{% endif %}</h3>
-
-    {% for item in entries %}
-        <div class="entry-card">
-           <div>
-                {% if item.tags %}
-                    {% for t in item.tags %}
-                        <span class="tag-badge">{{ t }}</span>
-                    {% endfor %}
-                {% else %}
-                    <span class="tag-badge">{{ item.tag if item.tag else 'untagged' }}</span>
-                {% endif %}
-
-                {% if item.filename %}
-                    <span class="file-info">📄 {{ item.filename }}</span>
-                {% endif %}
-            </div>
-
-            {% if item.score %}
-                <div class="score">Relevance Score: {{ item.score|round(4) }}</div>
+    <div class="panel">
+        <h3>Knowledge Base</h3>
+        <form method="GET" action="/" style="display: flex; gap: 10px; margin-bottom: 20px;">
+            <input type="text" name="search" placeholder="Search by meaning..." value="{{ request.args.get('search', '') }}" style="flex: 2;">
+            <input type="text" name="search_tags" placeholder="Filter by tags..." value="{{ request.args.get('search_tags', '') }}" style="flex: 1;">
+            <button type="submit">Search</button>
+            {% if is_search %}
+                <a href="/" class="btn-clear">Reset</a>
             {% endif %}
+        </form>
 
-            <p style="margin: 10px 0;">{{ item.content }}</p>
+        {% for item in entries %}
+            <div class="entry-card">
+                <div>
+                    {% if item.tags %}
+                        {% for t in item.tags %} <span class="tag-badge">{{ t }}</span> {% endfor %}
+                    {% endif %}
+                    {% if item.filename %} <span class="file-info">📄 {{ item.filename }}</span> {% endif %}
+                    <span style="font-size: 11px; color: #999; margin-left: 10px;">
+                        🕒 {{ item.timestamp }}
+                    </span>
+                </div>
 
-            <div class="actions">
-                <form action="/db/update/user_entries/{{ item.id }}" method="POST" style="display:inline;">
-                    <input type="text" name="updated_content" placeholder="Update text..." style="width: 60%; margin:0;">
-                    <button type="submit" style="padding: 6px 10px; font-size: 13px;">Update</button>
-                </form>
-                <a href="/db/delete/user_entries/{{ item.id }}" class="delete-link">Delete</a>
+                {% if item.score %} <div class="score">Match: {{ (item.score * 100)|round(1) }}%</div> {% endif %}
+
+                <p style="margin: 15px 0;">{{ item.content }}</p>
+
+                <div class="actions">
+                    <form action="/db/update/user_entries/{{ item.id }}" method="POST" style="display:flex; gap: 5px; flex-grow: 1; margin-right: 20px;">
+                        <input type="text" name="updated_content" placeholder="Edit content..." style="margin-bottom:0; font-size: 13px;">
+                        <button type="submit" style="padding: 5px 10px; font-size: 12px; background: #6c757d;">Update</button>
+                    </form>
+                    <a href="/db/delete/user_entries/{{ item.id }}" class="delete-link" onclick="return confirm('Delete this entry?')">Delete</a>
+                </div>
             </div>
-        </div>
-    {% else %}
-        <div class="entry-card">
-            <p style="color: #666; text-align: center;">No entries found in the database.</p>
-        </div>
-    {% endfor %}
-<script>
-        document.getElementById('upload-form').addEventListener('submit', function() {
-            // Show the loading overlay when the form is submitted
-            document.getElementById('loading-overlay').style.display = 'block';
+        {% else %}
+            <p style="text-align: center; color: #999; padding: 20px;">No entries found. Add some knowledge above!</p>
+        {% endfor %}
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/jstree.min.js"></script>
+
+    <script>
+        $(function () {
+            // Initialize jsTree
+            $('#directory_tree').jstree({
+                'core': { 'data': { 'url': '/api/get_directory_tree', 'dataType': 'json' } },
+                'plugins': ["checkbox", "types"],
+                'types': { 'default': { 'icon': 'jstree-folder' } }
+            });
+
+            // Start Syncing UI immediately
+            updateIndexerStatus();
+            setInterval(updateIndexerStatus, 3000);
+
+            // Handle Folder Selection Indexing
+            $('#save-directories').on('click', function() {
+                var selectedNodes = $('#directory_tree').jstree("get_selected", true);
+                var paths = selectedNodes.map(node => node.id);
+
+                if (paths.length === 0) return alert("Please select a folder.");
+
+                $('#loading-overlay').show();
+                $('.loading-text').text("Scanning directories...");
+
+                fetch('/api/index_directories', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ paths: paths })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    $('#loading-overlay').hide();
+                    alert(data.message);
+                    updateIndexerStatus(); // Sync UI immediately
+                });
+            });
+
+            // Upload loading trigger
+            $('#upload-form').on('submit', function() {
+                $('#loading-overlay').show();
+                $('.loading-text').text("Extracting and Embedding file...");
+            });
         });
+
+        // Background Indexer Sync Functions
+        function togglePause() {
+            fetch('/api/toggle_pause', { method: 'POST' })
+                .then(res => res.json())
+                .then(() => updateIndexerStatus());
+        }
+
+        function updateIndexerStatus() {
+            fetch('/api/indexer_status')
+                .then(res => res.json())
+                .then(data => updateUI(data))
+                .catch(err => console.error("Indexer Status unreachable."));
+        }
+
+        function updateUI(data) {
+            const bar = document.getElementById('indexer-status-bar');
+            const btn = document.getElementById('pause-btn');
+            const mode = document.getElementById('mode-text');
+            const statusText = document.getElementById('status-text');
+            const statusIcon = document.getElementById('status-icon');
+            const queueDisplay = document.getElementById('queue-count');
+
+            if (data.queue_size > 0 || data.manual_pause) {
+                bar.style.display = 'block';
+                queueDisplay.innerText = data.queue_size;
+
+                if (data.manual_pause) {
+                    statusText.innerText = "Indexer PAUSED";
+                    statusText.style.color = "#dc2626";
+                    statusIcon.style.background = "#dc2626";
+                    btn.innerText = "Resume Indexer";
+                    btn.style.background = "#16a34a";
+                    mode.innerText = "System waiting for user to resume...";
+                } else {
+                    statusText.innerText = "Indexer Processing...";
+                    statusText.style.color = "#92400e";
+                    statusIcon.style.background = "#16a34a";
+                    btn.innerText = "Pause Indexer";
+                    btn.style.background = "#dc2626";
+                    mode.innerText = data.throttled ? "Mode: High System Load (Throttled to 10%)" : "Mode: System Idle (Optimized to 60%)";
+                }
+            } else {
+                bar.style.display = 'none';
+            }
+        }
     </script>
 </body>
 </html>
