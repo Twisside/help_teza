@@ -5,6 +5,9 @@ import time
 import os
 import psutil
 from tag_generation import generate_tags_with_llm
+from metrics import MetricsTracker
+tracker = MetricsTracker()
+
 
 
 class UniversalBackgroundIndexer:
@@ -100,13 +103,16 @@ class UniversalBackgroundIndexer:
 
     def _index_file(self, filepath):
         try:
+            tracker.start_timer("file_indexing")
             with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             if not content.strip(): return
 
             # 1. Generate Context Embedding for the whole file
             file_context = content[:1000] # Use the start of the file for context
+            tracker.start_timer("embedding_generation")
             context_vector = self.db.embedder.embed_text(file_context)
+            tracker.stop_timer("embedding_generation")
 
             # 2. Search for existing tags (> 0.8)
             assigned_tags = self.db.get_semantic_tags(context_vector, threshold=0.8)
@@ -121,10 +127,18 @@ class UniversalBackgroundIndexer:
 
             # 4. Chunk and Index
             chunks = self.doc_chunker.chunk_document(content)
+            tracker.stop_timer("file_indexing", {
+                "filename": os.path.basename(filepath),
+                "chunk_count": len(chunks)
+            })
+
+            # Periodic report generation
+            if self.task_queue.qsize() % 5 == 0:
+                tracker.generate_research_plots()
             for i, chunk in enumerate(chunks):
                 if self.manual_pause: break
 
-                # OPTIONAL: Add chunk-specific tagging if it's long enough
+                # Add chunk-specific tagging if it's long enough
                 chunk_tags = list(assigned_tags)
                 if len(chunk.split()) > 50:
                     # Semantic search for chunk-specific tags from existing pool

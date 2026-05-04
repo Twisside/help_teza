@@ -11,6 +11,14 @@ from chunker import DocumentChunker
 from database import QdrantRepo
 from file_manager import FileManager
 from index_worker import UniversalBackgroundIndexer
+from metrics import MetricsTracker
+tracker = MetricsTracker()
+import logging
+
+# This targets the underlying Werkzeug server and tells it to shut up
+# unless there is a critical error.
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
 app = Flask(__name__)
 
@@ -199,6 +207,7 @@ TARGET_MODEL = os.getenv("TARGET_MODEL")
 
 def start_lm_studio():
     """Starts the LM Studio local server and loads the specified model."""
+
     print("Starting LM Studio API server in the background...")
     try:
         # Start the server (non-blocking)
@@ -210,8 +219,10 @@ def start_lm_studio():
         if TARGET_MODEL:
             print(f"Loading SLM: {TARGET_MODEL}...")
             # check=True ensures Python throws an error if the model fails to load
+            tracker.start_timer("model loading")
             subprocess.run(["lms", "load", TARGET_MODEL], check=True)
             print(f"{TARGET_MODEL} is locked and loaded!")
+            tracker.stop_timer("model loading")
         else:
             print("No target model specified. LM Studio server is running empty.")
 
@@ -234,10 +245,11 @@ def ask_ai():
     # 1. RETRIEVE: Get the most relevant chunks from Qdrant
     # Limiting the resources if the score is to low, but if the low score id the highest, use them
     # 1. Get initial results
+    tracker.start_timer("vector_search")
     search_results = db.search("user_entries", user_query, limit=5)
     high_quality = [res for res in search_results if res['score'] > 0.5]
     new_results = high_quality if len(high_quality) >= 3 else search_results[:3]
-
+    tracker.stop_timer("vector_search")
     # 2. AUGMENT: Include the date in the context string
     context_items = []
     for res in new_results:
@@ -272,6 +284,7 @@ def ask_ai():
     }
 
     try:
+        tracker.start_timer("model response")
         response = requests.post(lm_studio_url, json=payload)
 
         # 2. Check for errors and grab the EXACT message from LM Studio
@@ -279,6 +292,7 @@ def ask_ai():
             ai_answer = f"LM Studio rejected the request. Details: {response.text}"
         else:
             ai_answer = response.json()['choices'][0]['message']['content']
+        tracker.stop_timer("model response")
 
     except requests.exceptions.RequestException as e:
         ai_answer = f"Network Error connecting to LM Studio: {e}"
