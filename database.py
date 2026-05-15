@@ -1,16 +1,14 @@
 ﻿from datetime import datetime
+import os
 import uuid
 from abc import ABC, abstractmethod
+from dotenv import load_dotenv
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from embedding import EmbeddingService, QwenEmbeddingService, GemmaEmbeddingService
-import os
-from dotenv import load_dotenv
-import os
+from embedding import QwenEmbeddingService, GemmaEmbeddingService
 
-load_dotenv()  # Loads variables from .env
-os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
+
 
 class DatabaseInterface(ABC):
     @abstractmethod
@@ -67,7 +65,7 @@ class MongoRepo(DatabaseInterface):
 
 
 class QdrantRepo(DatabaseInterface):
-    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cuda"):
+    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cpu"):
         self.path = storage_path
         self.client = None
         self.device = device

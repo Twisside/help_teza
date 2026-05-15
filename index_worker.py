@@ -4,6 +4,8 @@ import queue
 import time
 import os
 import psutil
+
+from document_parser import UniversalParser
 from tag_generation import generate_tags_with_llm
 
 
@@ -13,6 +15,8 @@ class UniversalBackgroundIndexer:
         self.doc_chunker = doc_chunker
         self.task_queue = queue.Queue()
         self.is_running = True
+
+        self.doc_parser = UniversalParser(doc_chunker)
 
         # States
         self.manual_pause = False
@@ -104,14 +108,20 @@ class UniversalBackgroundIndexer:
                 content = f.read()
             if not content.strip(): return
 
-            # 1. Generate Context Embedding for the whole file
-            file_context = content[:1000] # Use the start of the file for context
+            # 1. ONE LINE handles Tika, HTML Tables, Tree-sitter, and Langchain!
+            chunks = self.doc_parser.process_file(filepath)
+
+            if not chunks:
+                return  # Skip empty or failed files
+
+            # 2. Get file context for tags (using the first chunk as representative context)
+            file_context = chunks[0][:1000] # Use the start of the file for context
             context_vector = self.db.embedder.embed_text(file_context)
 
-            # 2. Search for existing tags (> 0.8)
+            # 3. Search for existing tags (> 0.8)
             assigned_tags = self.db.get_semantic_tags(context_vector, threshold=0.8)
 
-            # 3. If no tags found, generate new ones
+            # 4. If no tags found, generate new ones
             if not assigned_tags:
                 print(f"No matching tags for {os.path.basename(filepath)}. Generating...")
                 new_tags = generate_tags_with_llm(file_context)
@@ -119,7 +129,7 @@ class UniversalBackgroundIndexer:
                     self.db.add_new_tag(nt)
                     assigned_tags.append(nt)
 
-            # 4. Chunk and Index
+            # 5. Chunk and Index
             chunks = self.doc_chunker.chunk_document(content)
             for i, chunk in enumerate(chunks):
                 if self.manual_pause: break

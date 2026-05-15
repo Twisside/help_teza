@@ -3,7 +3,6 @@ import os
 import subprocess
 import time
 from datetime import datetime
-
 import requests
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 from werkzeug.utils import secure_filename
@@ -19,6 +18,7 @@ app = Flask(__name__)
 UPLOAD_FOLDER = './uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+TARGET_MODEL = "google/gemma-3-1b" #< ====================================================================
 # -=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---
 
 
@@ -37,11 +37,21 @@ def home():
         raw_tags = request.form.get('tags', '')
         tags_list = [t.strip() for t in raw_tags.split(',') if t.strip()]
         if not tags_list:
-            tags_list = ['untagged'] # Default if left empty
+            tags_list = ['untagged']  # Default if left empty
 
         if entry:
-            # Save 'tags' as a list
-            db.insert("user_entries", {"content": entry, "tags": tags_list})
+            # --- NEW: Route the manual entry through the chunker ---
+            text_chunks = doc_chunker.chunk_document(entry)
+
+            # Insert each chunk individually
+            for i, chunk in enumerate(text_chunks):
+                db.insert("user_entries", {
+                    "content": chunk,
+                    "tags": tags_list,
+                    "filename": "Manual Entry",  # Helps identify it in the UI/Context
+                    "chunk_index": i
+                })
+
         return redirect(url_for('home'))
 
     query = request.args.get('search')
@@ -195,7 +205,7 @@ def toggle_pause():
 #  TODO:
 #   Will make a select menu of models in the future
 
-TARGET_MODEL = os.getenv("TARGET_MODEL")
+
 
 def start_lm_studio():
     """Starts the LM Studio local server and loads the specified model."""
@@ -228,9 +238,6 @@ def ask_ai():
     if not user_query:
         return redirect(url_for('home'))
 
-    # We include the day of the week because it helps the AI with "last Friday" etc.
-    now = datetime.now().strftime("%A, %B %d, %Y, %H:%M:%S")
-
     # 1. RETRIEVE: Get the most relevant chunks from Qdrant
     # Limiting the resources if the score is to low, but if the low score id the highest, use them
     # 1. Get initial results
@@ -250,7 +257,7 @@ def ask_ai():
         context_items.append(formatted_chunk)
 
     context_string = "\n\n---\n\n".join(context_items)
-
+    now = datetime.now()
     # 3. GENERATE: Adjust system prompt to respect dates
     system_prompt = (
         f"You are a helpful assistant. The current date and time is {now}. Answer the user's question based ONLY on the provided context. "
@@ -263,7 +270,7 @@ def ask_ai():
 
     lm_studio_url = "http://127.0.0.1:1234/v1/chat/completions"
     payload = {
-        "model": os.getenv("TARGET_MODEL"), # LM Studio ignores this name but requires the field
+        "model": TARGET_MODEL, # LM Studio ignores this name but requires the field
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -305,7 +312,7 @@ def shutdown():
     print("Shutting down LM Studio server...")
     try:
         if TARGET_MODEL:
-            subprocess.run(["lms", "unload", TARGET_MODEL])
+            subprocess.run(["lms", "unload"])
         subprocess.run(["lms", "server", "stop"])
     except FileNotFoundError:
         pass # lms wasn't installed, nothing to shut down

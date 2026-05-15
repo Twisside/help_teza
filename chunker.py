@@ -1,32 +1,115 @@
 ﻿import math
 import re
-from transformers import AutoTokenizer
-import sentencepiece
+from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+from tree_sitter import Language as TSLanguage, Parser
+import tree_sitter_python as tspython
+import tree_sitter_javascript as tsjavascript
+import tree_sitter_c_sharp as tscsharp
 
-
-# TODO:
-#  find a dynamic way to switch model by model used
-
-model_id = "google/gemma-3-4b-it"
 
 class DocumentChunker:
-    def __init__(self, model_name="mistralai/Ministral-3-14B-Instruct-2512", max_tokens=1000, overlap_tokens=100):
+    def __init__(self, max_tokens=1000, overlap_tokens=100):
+        """
+        Initializes the chunking engine using a fast, dependency-free character heuristic.
+        (1 Token = 4 Characters)
+        """
         self.max_tokens = max_tokens
         self.overlap_tokens = overlap_tokens
 
-        # This is the "Automation"
-        print(f"Loading tokenizer for: {model_name}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Pre-calculate character limits based on the 4-chars-per-token rule
+        self.max_chars = self.max_tokens * 4
+        self.overlap_chars = self.overlap_tokens * 4
+
+        print(f"Chunker initialized: Max {self.max_chars} chars, Overlap {self.overlap_chars} chars.")
+
+        # Map file extensions to LangChain's syntax-aware splitters
+        self.langchain_map = {
+            ".py": Language.PYTHON,
+            ".js": Language.JS,
+            ".cs": Language.CSHARP,
+        }
+
+        # Initialize Tree-sitter parsers for AST extraction
+        self.ts_parsers = {}
+        try:
+            self.ts_parsers[".py"] = Parser(TSLanguage(tspython.language()))
+            self.ts_parsers[".js"] = Parser(TSLanguage(tsjavascript.language()))
+            self.ts_parsers[".cs"] = Parser(TSLanguage(tscsharp.language()))
+        except Exception as e:
+            print(f"Warning: Failed to load Tree-sitter parsers. {e}")
 
     def count_tokens(self, text: str) -> int:
-        return len(self.tokenizer.encode(text))
+        """
+        Estimates the exact number of tokens using the standard 4-character rule.
+        Uses math.ceil to err on the side of caution (rounding up).
+        """
+        return math.ceil(len(text) / 4)
+
+    def _get_langchain_splitter(self, extension: str):
+        """
+        Creates a language-specific text splitter with overlapping capabilities.
+        Uses the pre-calculated character limits.
+        """
+        lang = self.langchain_map.get(extension, Language.PYTHON)
+
+        return RecursiveCharacterTextSplitter.from_language(
+            language=lang,
+            chunk_size=self.max_chars,
+            chunk_overlap=self.overlap_chars
+        )
+
+    def chunk_code(self, text: str, extension: str) -> list[str]:
+        """
+        Executes hybrid code chunking using AST parsing and overlapping fallbacks.
+        """
+        parser = self.ts_parsers.get(extension)
+
+        # Fallback to pure LangChain if language isn't supported by Tree-sitter
+        if not parser:
+            splitter = self._get_langchain_splitter(extension)
+            return splitter.split_text(text)
+
+        tree = parser.parse(bytes(text, "utf8"))
+        root_node = tree.root_node
+
+        target_node_types = [
+            'function_definition', 'class_definition', 'method_declaration',
+            'function_declaration', 'arrow_function', 'declaration'
+        ]
+
+        logical_blocks = []
+
+        def traverse_tree(node):
+            if node.type in target_node_types:
+                block_text = text[node.start_byte:node.end_byte]
+                logical_blocks.append(block_text)
+                return
+
+            for child in node.children:
+                traverse_tree(child)
+
+        traverse_tree(root_node)
+
+        if not logical_blocks:
+            logical_blocks = [text]
+
+        final_chunks = []
+        langchain_fallback = self._get_langchain_splitter(extension)
+
+        for block in logical_blocks:
+            # Check length using the fast character estimation
+            if len(block) <= self.max_chars:
+                final_chunks.append(block)
+            else:
+                sub_chunks = langchain_fallback.split_text(block)
+                final_chunks.extend(sub_chunks)
+
+        return final_chunks
 
     def chunk_document(self, text: str) -> list[str]:
-        # Split by double newlines to find paragraphs
+        """Standard document chunking using the fast 4-character rule."""
         paragraphs = re.split(r'\n\s*\n', text.strip())
         final_chunks = []
-
-        # This buffer will hold small paragraphs until we hit a big one
         small_paragraph_buffer = []
 
         for p in paragraphs:
@@ -34,50 +117,43 @@ class DocumentChunker:
             if not p:
                 continue
 
-            # Define "small" as 3 words or fewer
             word_count = len(p.split())
 
             if word_count <= 3:
-                # Accumulate small paragraphs (like headers or titles)
                 small_paragraph_buffer.append(p)
             else:
-                # We found a "big" paragraph!
-                # Combine it with whatever was in the buffer
                 if small_paragraph_buffer:
                     combined_text = "\n".join(small_paragraph_buffer) + "\n" + p
-                    small_paragraph_buffer = [] # Clear the buffer
+                    small_paragraph_buffer = []
                 else:
                     combined_text = p
 
-                # Now process the combined text normally
-                if self.count_tokens(combined_text) <= self.max_tokens:
+                # Estimate size quickly using length instead of tokenizer
+                if len(combined_text) <= self.max_chars:
                     final_chunks.append(combined_text)
                 else:
-                    # If the combined block is too big, use the fallback sentence splitter
                     final_chunks.extend(self._fallback_sentence_split(combined_text))
 
-        # If the document ends with small paragraphs (and no big one follows)
-        # we don't want to lose them, so we add them as a final chunk.
         if small_paragraph_buffer:
             final_chunks.append("\n".join(small_paragraph_buffer))
 
         return final_chunks
 
     def _fallback_sentence_split(self, text: str) -> list[str]:
+        """Sentence splitter fallback using character limits."""
         sentences = re.split(r'(?<=[.!?]) +', text)
         chunks = []
         current_chunk = ""
 
         for sentence in sentences:
-
-            if self.count_tokens(sentence) > self.max_tokens:
+            if len(sentence) > self.max_chars:
                 if current_chunk:
                     chunks.append(current_chunk.strip())
                     current_chunk = ""
                 chunks.extend(self._hard_math_split(sentence))
                 continue
 
-            if self.count_tokens(current_chunk + " " + sentence) > self.max_tokens:
+            if len(current_chunk + " " + sentence) > self.max_chars:
                 chunks.append(current_chunk.strip())
                 current_chunk = sentence
             else:
@@ -89,25 +165,19 @@ class DocumentChunker:
         return chunks
 
     def _hard_math_split(self, text: str) -> list[str]:
-
-        total_tokens = self.count_tokens(text)
-        num_chunks = math.ceil(total_tokens / self.max_tokens)
-        target_tokens = math.ceil(total_tokens / num_chunks)
-        target_chars = target_tokens * 4
-        overlap_chars = self.overlap_tokens * 4
-
+        """Final failsafe: hard cuts using character math."""
         chunks = []
         start = 0
         text_length = len(text)
 
         while start < text_length:
-            end = start + target_chars
+            end = start + self.max_chars
             if end < text_length:
                 last_space = text.rfind(' ', start, end)
                 if last_space != -1:
                     end = last_space
 
             chunks.append(text[start:end].strip())
-            start = end - overlap_chars
+            start = end - self.overlap_chars
 
         return chunks
