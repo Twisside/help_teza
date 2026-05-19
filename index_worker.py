@@ -72,35 +72,43 @@ class UniversalBackgroundIndexer:
                 time.sleep(1)
                 continue
 
-            if not self.task_queue.empty():
-                other_cpu, ram_usage = self._get_resource_usage()
+            try:
+                # BLOCKING GET: The thread goes to sleep here and uses 0% CPU.
+                # It instantly wakes up when an item is added to the queue via add_to_queue().
+                # The 1-second timeout just lets it quickly loop back to check 'is_running' and 'manual_pause'.
+                filepath = self.task_queue.get(timeout=1.0)
+            except queue.Empty:
+                # Queue is empty, go right back to sleep
+                continue
 
-                # Dynamic Throttling Logic (10% vs 60%)
-                if other_cpu > self.OTHER_CPU_THRESHOLD or ram_usage > self.OTHER_RAM_THRESHOLD:
-                    target_duty_cycle = 0.10 # Limit to 10% of time
-                    self.system_busy = True
-                else:
-                    target_duty_cycle = 0.60 # Limit to 60% of time (staying snappy)
-                    self.system_busy = False
+            # --- WE ONLY REACH THIS POINT IF A FILE IS ACTIVELY BEING PROCESSED ---
 
-                filepath = self.task_queue.get()
+            # Check system pressure ONLY when we are about to manage data
+            other_cpu, ram_usage = self._get_resource_usage()
 
-                # Measure how long the actual work takes
-                start_work = time.time()
-                self._index_file(filepath)
-                work_duration = time.time() - start_work
-
-                # Duty Cycle Math: (Work / TotalTime) = Target
-                # This forces the thread to sleep proportional to how hard it just worked
-                sleep_duration = (work_duration / target_duty_cycle) - work_duration
-
-                # Ensure we don't sleep forever, but respect the throttle
-                time.sleep(max(0.1, sleep_duration))
-
-                self.task_queue.task_done()
+            # Dynamic Throttling Logic (10% vs 60%)
+            if other_cpu > self.OTHER_CPU_THRESHOLD or ram_usage > self.OTHER_RAM_THRESHOLD:
+                target_duty_cycle = 0.10 # Limit to 10% of time
+                self.system_busy = True
             else:
-                # No files to process? Nap for a bit.
-                time.sleep(5)
+                target_duty_cycle = 0.60 # Limit to 60% of time
+                self.system_busy = False
+
+            # Measure how long the actual work takes
+            start_work = time.time()
+            self._index_file(filepath)
+            work_duration = time.time() - start_work
+            print(f">>>The queue was processed in {work_duration:.2f} seconds")
+
+            # Duty Cycle Math: (Work / TotalTime) = Target
+            sleep_duration = (work_duration / target_duty_cycle) - work_duration
+
+            # Ensure we don't sleep forever, but respect the throttle
+            time.sleep(max(0.1, sleep_duration))
+
+            self.task_queue.task_done()
+
+
 
     def _index_file(self, filepath):
         try:

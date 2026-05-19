@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from embedding import QwenEmbeddingService, GemmaEmbeddingService
+from embedding import LMSEmbeddingService
 
 
 
@@ -71,15 +71,9 @@ class QdrantRepo(DatabaseInterface):
         self.device = device
         self.tag_collection = "global_tags"
 
-        # FIX: Make the collection name dynamic based on the model
-        if use_qwen:
-            print("Initializing Qwen3-Embedding-0.6B...")
-            self.embedder = QwenEmbeddingService(device=self.device)
-            self.collection_name = "user_entries_qwen_1024" # Specific name for Qwen
-        else:
-            print("Initializing EmbeddingGemma-300M...")
-            self.embedder = GemmaEmbeddingService(device=self.device)
-            self.collection_name = "user_entries_gemma_768" # Specific name for Gemma
+        print("Initializing EmbeddingGemma-300M...")
+        self.embedder = LMSEmbeddingService()
+        self.collection_name = "user_entries_gemma_768" # Specific name for Gemma
 
 
     def connect(self):
@@ -138,7 +132,7 @@ class QdrantRepo(DatabaseInterface):
             data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         text_to_embed = data.get("content", "")
-        vector = self.embedder.embed_text(text_to_embed)
+        vector = self.embedder.embed_text(text_to_embed, is_query=False)
 
         point = models.PointStruct(
             id=str(uuid.uuid4()),
@@ -154,7 +148,7 @@ class QdrantRepo(DatabaseInterface):
         new_data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if "content" in new_data:
-            new_vector = self.embedder.embed_text(new_data["content"])
+            new_vector = self.embedder.embed_text(new_data["content"], is_query=False)
             return self.client.upsert(
                 collection_name=target_col,
                 points=[models.PointStruct(id=item_id, vector=new_vector, payload=new_data)]

@@ -1,5 +1,5 @@
-﻿from abc import ABC, abstractmethod
-from sentence_transformers import SentenceTransformer
+﻿import requests
+from abc import ABC, abstractmethod
 
 
 class EmbeddingService(ABC):
@@ -13,33 +13,40 @@ class EmbeddingService(ABC):
         pass
 
 
-class GemmaEmbeddingService(EmbeddingService):
-    def __init__(self, model_name="google/embeddinggemma-300m", device="cpu"):
-        # Note: Gemma-300M might require a HuggingFace login (token)
-        # to download due to its license.
-        self.model = SentenceTransformer(model_name, device=device)
-        self._dim = 768  # Default dimension for Gemma-300M
+class LMSEmbeddingService(EmbeddingService):
+    def __init__(self, model_name="text-embedding-embeddinggemma-300m-qat", dimension=768, base_url="http://127.0.0.1:1234/v1"):
+        """
+        :param model_name: The identifier of the embedding model loaded in LM Studio.
+        :param dimension: The output dimension of the model (must match your Qdrant collection).
+        :param base_url: The URL where LM Studio is running.
+        """
+        self.model_name = model_name
+        self._dim = dimension
+        self.base_url = base_url
 
     def embed_text(self, text: str, is_query: bool = True) -> list[float]:
-        # Gemma uses 'Retrieval-query' for searching and 'STS' for indexing
-        task = "Retrieval-query" if is_query else "STS"
-        return self.model.encode(text, prompt_name=task).tolist()
-
-    @property
-    def dimension(self) -> int:
-        return self._dim
-
-
-class QwenEmbeddingService(EmbeddingService):
-    def __init__(self, model_name="Qwen/Qwen3-Embedding-0.6B", device="cpu"):
-        self.model = SentenceTransformer(model_name, device=device)
-        self._dim = 1024  # Default dimension for Qwen3-0.6B
-
-    def embed_text(self, text: str, is_query: bool = True) -> list[float]:
-        # Qwen performs better if you explicitly label queries
-        prefix = "Query: " if is_query else "Document: "
+        # Some models benefit from a prompt prefix. Adjust as needed for your specific model.
+        prefix = "search_query: " if is_query else "search_document: "
         full_text = f"{prefix}{text}"
-        return self.model.encode(full_text).tolist()
+
+        url = f"{self.base_url}/embeddings"
+        payload = {
+            "model": self.model_name,
+            "input": full_text
+        }
+
+        try:
+            response = requests.post(url, json=payload)
+            response.raise_for_status()  # Raise an exception for bad status codes
+
+            # LM Studio returns OpenAI-compatible JSON
+            data = response.json()
+            return data['data'][0]['embedding']
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching embedding from LM Studio: {e}")
+            # Depending on your architecture, you might want to return an empty list or raise the error
+            raise e
 
     @property
     def dimension(self) -> int:

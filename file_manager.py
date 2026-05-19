@@ -45,3 +45,33 @@ class FileManager:
         print(f"DEBUG: Saving {len(paths)} paths to watch list...")
         # For now, we just return True
         return True
+
+    def get_all_files_from_paths(self, paths):
+        """
+        Recursively walks through a list of directory paths and returns a
+        flat list of all absolute file paths found inside them.
+        """
+        all_files = []
+
+        for path in paths:
+            if not os.path.exists(path):
+                print(f"Warning: Path does not exist - {path}")
+                continue
+
+            # If the path is a direct file, just add it
+            if os.path.isfile(path):
+                all_files.append(path)
+
+            # If the path is a directory, walk through it recursively
+            elif os.path.isdir(path):
+                for root, dirs, files in os.walk(path):
+                    # Ignore hidden folders (like .git, .venv, .idea) to save processing time
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                    for file in files:
+                        # Ignore hidden files
+                        if not file.startswith('.'):
+                            full_file_path = os.path.join(root, file)
+                            all_files.append(full_file_path)
+
+        return all_files
