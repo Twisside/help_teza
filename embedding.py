@@ -14,7 +14,7 @@ class EmbeddingService(ABC):
 
 
 class LMSEmbeddingService(EmbeddingService):
-    def __init__(self, model_name="text-embedding-embeddinggemma-300m-qat", dimension=768, base_url="http://127.0.0.1:1234/v1"):
+    def __init__(self, model_name="text-embedding-embeddinggemma-300m@q4_0", dimension=768, base_url="http://127.0.0.1:1234/v1"):
         """
         :param model_name: The identifier of the embedding model loaded in LM Studio.
         :param dimension: The output dimension of the model (must match your Qdrant collection).

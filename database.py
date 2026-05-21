@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 import os
 import uuid
 from abc import ABC, abstractmethod
@@ -212,3 +212,64 @@ class QdrantRepo(DatabaseInterface):
             })
 
         return results
+
+    def search_conversation_archive(self, query_text, limit=5):
+        """Search the conversation archive collection."""
+        archive_collection = "conversation_archive"
+        if not self.client.collection_exists(archive_collection):
+            return []
+
+        query_vector = self.embedder.embed_text(query_text)
+        response = self.client.query_points(
+            collection_name=archive_collection,
+            query=query_vector,
+            limit=limit,
+            with_payload=True
+        )
+
+        results = []
+        for hit in response.points:
+            results.append({
+                "id": hit.id,
+                "score": hit.score,
+                "payload": hit.payload
+            })
+        return results
+
+    def insert_to_conversation_archive(self, content: str, role: str, turn_index: int, tags: list):
+        """Insert a message into the conversation archive."""
+        archive_collection = "conversation_archive"
+        if not self.client.collection_exists(archive_collection):
+            self.client.create_collection(
+                collection_name=archive_collection,
+                vectors_config=models.VectorParams(
+                    size=self.embedder.dimension,
+                    distance=models.Distance.COSINE
+                ),
+            )
+
+        vector = self.embedder.embed_text(content, is_query=False)
+        payload = {
+            "content": content,
+            "role": role,
+            "turn_index": turn_index,
+            "tags": tags,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        point = models.PointStruct(
+            id=str(uuid.uuid4()),
+            vector=vector,
+            payload=payload
+        )
+        return self.client.upsert(collection_name=archive_collection, points=[point])
+
+    def clear_conversation_archive(self):
+        """Delete all points from the conversation archive."""
+        archive_collection = "conversation_archive"
+        if self.client.collection_exists(archive_collection):
+            self.client.delete(
+                collection_name=archive_collection,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(must=[])
+                )
+            )

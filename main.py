@@ -1,4 +1,4 @@
-﻿import atexit
+import atexit
 import os
 import subprocess
 import time
@@ -12,6 +12,7 @@ from document_parser import UniversalParser
 from file_manager import FileManager
 from index_worker import UniversalBackgroundIndexer
 from tag_generation import generate_tags_with_llm
+from chat_handle import ChatSession
 
 app = Flask(__name__)
 
@@ -22,12 +23,14 @@ UPLOAD_FOLDER = './uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 TARGET_MODEL = "google/gemma-3-1b"
-EMBEDDING_MODEL ="text-embedding-embeddinggemma-300m" #< ====================================================================
+EMBEDDING_MODEL ="text-embedding-embeddinggemma-300m@q4_0" #< ====================================================================
 # -=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---
 
 
 db = QdrantRepo(use_qwen=False) #8187
 db.connect()
+
+chat_session = ChatSession(db)
 
 doc_chunker = DocumentChunker()
 doc_parser = UniversalParser(doc_chunker)
@@ -337,6 +340,77 @@ def ask_ai():
         "ai_answer": ai_answer,
         "retrieved_context": context_data
     })
+
+STAY_LOADED = False
+
+@ app.route('/api/chat/ask', methods=['POST'])
+def chat_ask():
+    user_query = request.form.get('message')
+    if not user_query:
+        return jsonify({"error": "No message provided"}), 400
+
+    if not STAY_LOADED and TARGET_MODEL:
+        print(f"Loading {TARGET_MODEL} on-demand...")
+        subprocess.run(["lms", "load", TARGET_MODEL], check=False)
+        time.sleep(2)
+
+    chat_session.add_message("user", user_query)
+
+    context_results = chat_session.search_context(user_query)
+
+    system_prompt = chat_session.build_system_prompt(user_query, context_results)
+    conversation_history = chat_session.build_conversation_history()
+
+    lm_studio_url = "http://127.0.0.1:1234/v1/chat/completions"
+    messages = [{"role": "system", "content": system_prompt}] + conversation_history
+    payload = {
+        "model": TARGET_MODEL,
+        "messages": messages,
+        "temperature": 0.3
+    }
+
+    try:
+        response = requests.post(lm_studio_url, json=payload)
+        if response.status_code != 200:
+            ai_answer = f"LM Studio rejected the request. Details: {response.text}"
+        else:
+            ai_answer = response.json()['choices'][0]['message']['content']
+    except requests.exceptions.RequestException as e:
+        ai_answer = f"Network Error connecting to LM Studio: {e}"
+
+    chat_session.add_message("assistant", ai_answer)
+    chat_session.save()
+
+    context_data = []
+    for res in context_results.get("user_entries", []):
+        context_data.append({
+            "score": round(res['score'], 2),
+            "source": res['payload'].get('filename', 'Manual Entry'),
+            "content": res['payload'].get('content', '')[:150]
+        })
+    for res in context_results.get("conversation_archive", []):
+        context_data.append({
+            "score": round(res['score'], 2),
+            "source": "chat_archive",
+            "content": res['payload'].get('content', '')[:150]
+        })
+
+    return jsonify({
+        "answer": ai_answer,
+        "context": context_data,
+        "history": chat_session.get_history()
+    })
+
+
+@app.route('/api/chat/clear', methods=['POST'])
+def chat_clear():
+    chat_session.clear()
+    return jsonify({"status": "success"})
+
+
+@app.route('/api/chat/history', methods=['GET'])
+def chat_history():
+    return jsonify(chat_session.get_history())
 
 # Update your existing shutdown behavior to also kill the LM Studio server
 def shutdown():

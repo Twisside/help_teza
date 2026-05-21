@@ -42,6 +42,12 @@
 
         /* Persistent Indexer Status Bar */
         #indexer-status-bar { display: none; background: #fffbeb; border: 1px solid #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+
+        /* Chat Messages */
+        .chat-message { max-width: 80%; padding: 10px 15px; border-radius: 12px; margin-bottom: 10px; word-wrap: break-word; }
+        .chat-user { background: #0066cc; color: white; margin-left: auto; border-bottom-right-radius: 4px; }
+        .chat-assistant { background: #e9ecef; color: #333; margin-right: auto; border-bottom-left-radius: 4px; }
+        .chat-meta { font-size: 10px; opacity: 0.7; margin-top: 4px; }
     </style>
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/themes/default/style.min.css" />
@@ -107,11 +113,26 @@
     </div>
 
     <div class="panel" style="border-left: 5px solid #16a34a;">
-        <h3>Ask your Documents</h3>
+        <h3>Chat Session
+            <button id="clear-chat-btn" onclick="clearChat()" style="float: right; background: #dc2626; padding: 5px 15px; font-size: 12px;">Clear Chat</button>
+        </h3>
+
+        <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #e1e4e8; border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #fafafa;">
+            <div id="chat-empty" style="text-align: center; color: #999; padding-top: 150px;">No messages yet. Start a conversation!</div>
+        </div>
+
+        <form id="chat-form" onsubmit="sendChatMessage(event)" style="display: flex; gap: 10px;">
+            <input type="text" id="chat-input" name="message" placeholder="Ask anything about your documents..." required style="flex-grow: 1; margin-bottom: 0;">
+            <button type="submit" id="chat-btn" style="background: #16a34a; white-space: nowrap;">Send</button>
+        </form>
+    </div>
+
+    <div class="panel" style="border-left: 5px solid #0066cc;">
+        <h3>Quick AI Query</h3>
 
         <form id="ask-form" onsubmit="askAI(event)" style="display: flex; gap: 10px;">
             <input type="text" name="question" placeholder="What is mentioned about...?" required style="flex-grow: 1;">
-            <button type="submit" id="ask-btn" style="background: #16a34a; white-space: nowrap;">Generate AI Response</button>
+            <button type="submit" id="ask-btn" style="background: #0066cc; white-space: nowrap;">Generate AI Response</button>
         </form>
 
         <div id="ai-response-container"></div>
@@ -234,6 +255,8 @@
                     startStatusPolling();
                 });
             });
+
+            loadChatHistory();
         });
 
         function togglePause() {
@@ -456,9 +479,102 @@ function uploadFile(event, form) {
             document.getElementById('ai-response-container').innerHTML = '';
             sessionStorage.removeItem('cached_ai_answer');
 
-            // NEW: Updated key to match the ask-form ID
             sessionStorage.removeItem('cached_ask-form_question');
             document.querySelector('input[name="question"]').value = '';
+        }
+
+        // ==========================================
+        // Chat Functions
+        // ==========================================
+
+        function loadChatHistory() {
+            fetch('/api/chat/history')
+                .then(res => res.json())
+                .then(history => {
+                    const container = document.getElementById('chat-messages');
+                    const emptyMsg = document.getElementById('chat-empty');
+                    if (emptyMsg) emptyMsg.remove();
+                    container.innerHTML = '';
+
+                    history.forEach(msg => {
+                        appendChatMessage(msg.role, msg.content, msg.timestamp);
+                    });
+                    if (history.length === 0) {
+                        container.innerHTML = '<div id="chat-empty" style="text-align: center; color: #999; padding-top: 150px;">No messages yet. Start a conversation!</div>';
+                    }
+                    container.scrollTop = container.scrollHeight;
+                });
+        }
+
+        function appendChatMessage(role, content, timestamp) {
+            const container = document.getElementById('chat-messages');
+            const emptyMsg = document.getElementById('chat-empty');
+            if (emptyMsg) emptyMsg.remove();
+
+            const div = document.createElement('div');
+            div.className = `chat-message chat-${role}`;
+            const timeStr = timestamp || new Date().toLocaleTimeString();
+            div.innerHTML = `
+                <div>${escapeHtml(content)}</div>
+                <div class="chat-meta">${role === 'user' ? 'You' : 'AI'} · ${timeStr}</div>
+            `;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function sendChatMessage(event) {
+            event.preventDefault();
+            const form = document.getElementById('chat-form');
+            const formData = new FormData(form);
+            const input = document.getElementById('chat-input');
+            const btn = document.getElementById('chat-btn');
+            const message = formData.get('message');
+
+            if (!message) return;
+
+            const originalText = btn.innerText;
+            btn.innerHTML = '<span class="btn-spinner"></span>';
+            btn.disabled = true;
+            input.disabled = true;
+
+            fetch('/api/chat/ask', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    input.disabled = false;
+
+                    if (data.error) {
+                        alert(data.error);
+                        return;
+                    }
+
+                    appendChatMessage('user', message, new Date().toLocaleTimeString());
+                    appendChatMessage('assistant', data.answer, new Date().toLocaleTimeString());
+                    input.value = '';
+                })
+                .catch(err => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    input.disabled = false;
+                    alert("Error connecting to chat backend.");
+                });
+        }
+
+        function clearChat() {
+            if (!confirm('Clear all chat messages?')) return;
+            fetch('/api/chat/clear', { method: 'POST' })
+                .then(res => res.json())
+                .then(() => {
+                    const container = document.getElementById('chat-messages');
+                    container.innerHTML = '<div id="chat-empty" style="text-align: center; color: #999; padding-top: 150px;">No messages yet. Start a conversation!</div>';
+                });
         }
     </script>
 </body>
