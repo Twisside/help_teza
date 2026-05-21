@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -31,10 +31,14 @@
         /* Directory Tree */
         #directory-tree-container { max-height: 350px; overflow-y: auto; background: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
 
-        /* Loading Overlay */
+        /* Loading Overlay - Directory indexing only */
         #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 255, 255, 0.9); z-index: 9999; text-align: center; padding-top: 20vh; }
         .spinner { border: 6px solid #f3f3f3; border-top: 6px solid #0066cc; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Inline Button Spinner */
+        .btn-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+        button:disabled { opacity: 0.7; cursor: not-allowed; }
 
         /* Persistent Indexer Status Bar */
         #indexer-status-bar { display: none; background: #fffbeb; border: 1px solid #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
@@ -58,18 +62,18 @@
         </div>
 
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-            <form id="manual-form" onsubmit="addManualEntry(event, this)">
+<form id="manual-form" onsubmit="addManualEntry(event, this)">
                 <strong>Manual Text Entry</strong>
                 <input type="text" name="user_input" placeholder="Type knowledge here..." required>
                 <input type="text" name="tags" placeholder="Tags (comma separated)">
-                <button type="submit">Add Entry</button>
+                <button type="submit" id="add-entry-btn">Add Entry</button>
             </form>
 
-            <form onsubmit="uploadFile(event, this)">
+            <form id="upload-form" onsubmit="uploadFile(event, this)">
                 <strong>Upload File</strong>
                 <input type="file" name="file" accept=".pdf,.txt,.md,.py,.js,.cs" required>
                 <input type="text" name="tags" placeholder="Tags (e.g. finance, thesis)">
-                <button type="submit" style="background: #28a745;">Upload & Index</button>
+                <button type="submit" id="upload-btn" style="background: #28a745;">Upload & Index</button>
             </form>
         </div>
     </div>
@@ -305,39 +309,44 @@
             }
         }
 
-        function addManualEntry(event, form) {
+function addManualEntry(event, form) {
             event.preventDefault();
             const formData = new FormData(form);
-            const btn = form.querySelector('button');
-            btn.innerText = "Adding...";
+            const btn = document.getElementById('add-entry-btn');
+            const originalText = btn.innerText;
+            btn.innerHTML = '<span class="btn-spinner"></span>Adding...';
             btn.disabled = true;
 
             fetch('/', { method: 'POST', body: formData })
                 .then(res => res.json())
                 .then(data => {
-                    btn.innerText = "Add Entry";
+                    btn.innerText = originalText;
                     btn.disabled = false;
 
                     if (data.error) {
-                        // ERROR: Show message, leave form and memory intact
                         showDynamicMessage(data.error, true);
                     } else {
-                        // SUCCESS: Show message, clear form, clear memory
                         form.reset();
                         form.querySelectorAll('input[type="text"]').forEach(input => {
                             sessionStorage.removeItem(`cached_${form.id}_${input.name}`);
                         });
                         showDynamicMessage(data.message, false);
                     }
+                })
+                .catch(() => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    showDynamicMessage("Failed to add entry", true);
                 });
         }
 
-        function uploadFile(event, form) {
+function uploadFile(event, form) {
             event.preventDefault();
             const formData = new FormData(form);
-
-            $('#loading-overlay').show();
-            $('.loading-text').text("Extracting and Embedding file...");
+            const btn = document.getElementById('upload-btn');
+            const originalText = btn.innerText;
+            btn.innerHTML = '<span class="btn-spinner"></span>Processing...';
+            btn.disabled = true;
 
             fetch('/upload', { method: 'POST', body: formData })
                 .then(async res => {
@@ -346,9 +355,9 @@
                     return data;
                 })
                 .then(data => {
-                    $('#loading-overlay').hide();
+                    btn.innerText = originalText;
+                    btn.disabled = false;
 
-                    // SUCCESS: Clear form and memory
                     form.reset();
                     form.querySelectorAll('input[type="text"]').forEach(input => {
                         sessionStorage.removeItem(`cached_${form.id}_${input.name}`);
@@ -357,9 +366,8 @@
                     showDynamicMessage(data.message, false);
                 })
                 .catch(err => {
-                    $('#loading-overlay').hide();
-
-                    // ERROR: Show message, leave form and memory intact
+                    btn.innerText = originalText;
+                    btn.disabled = false;
                     showDynamicMessage(err.message, true);
                 });
         }

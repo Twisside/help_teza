@@ -119,7 +119,7 @@ class DocumentChunker:
 
             word_count = len(p.split())
 
-            if word_count <= 3:
+            if word_count <= 10:
                 small_paragraph_buffer.append(p)
             else:
                 if small_paragraph_buffer:

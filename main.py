@@ -22,7 +22,7 @@ UPLOAD_FOLDER = './uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 TARGET_MODEL = "google/gemma-3-1b"
-EMBEDDING_MODEL ="text-embedding-embeddinggemma-300m-qat" #< ====================================================================
+EMBEDDING_MODEL ="text-embedding-embeddinggemma-300m" #< ====================================================================
 # -=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---
 
 
@@ -347,7 +347,9 @@ def shutdown():
     print("Shutting down LM Studio server...")
     try:
         if TARGET_MODEL:
-            subprocess.run(["lms", "unload"])
+            subprocess.run(["lms", "unload", TARGET_MODEL])
+        if EMBEDDING_MODEL:
+            subprocess.run(["lms", "unload", EMBEDDING_MODEL])
         subprocess.run(["lms", "server", "stop"])
     except FileNotFoundError:
         pass # lms wasn't installed, nothing to shut down
