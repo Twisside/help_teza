@@ -1,4 +1,5 @@
 import atexit
+import json
 import os
 import subprocess
 import time
@@ -15,6 +16,25 @@ from tag_generation import generate_tags_with_llm
 from chat_handle import ChatSession
 
 app = Flask(__name__)
+
+# --- Settings Persistence ---
+SETTINGS_FILE = "./settings.json"
+
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"stay_loaded": False, "target_model": None}
+
+def save_settings(settings):
+    with open(SETTINGS_FILE, "w") as f:
+        json.dump(settings, f, indent=2)
+
+settings = load_settings()
+STAY_LOADED = settings.get("stay_loaded", False)
 
 # --- Setup Local File System Storage ----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---=-
 # will change it so search nad select through the file system
@@ -238,30 +258,22 @@ def toggle_pause():
 
 
 def start_lm_studio():
-    """Starts the LM Studio local server and loads the specified model."""
     print("Starting LM Studio API server in the background...")
     try:
-        # Start the server (non-blocking)
         subprocess.Popen(["lms", "server", "start"])
-
-        # Give the server a few seconds to initialize
         time.sleep(3)
-
-        if TARGET_MODEL:
-            print(f"Loading SLM: {TARGET_MODEL}...")
-            # check=True ensures Python throws an error if the model fails to load
-            subprocess.run(["lms", "load", TARGET_MODEL], check=True)
-            print(f"{TARGET_MODEL} is locked and loaded!")
-        else:
-            print("No target model specified. LM Studio server is running empty.")
-
 
         if EMBEDDING_MODEL:
             print(f"Loading Embedding Model: {EMBEDDING_MODEL}...")
             subprocess.run(["lms", "load", EMBEDDING_MODEL], check=True)
             print(f"{EMBEDDING_MODEL} loaded!")
-        else:
-            print("No target model specified. LM Studio server is running empty.")
+
+        if STAY_LOADED and TARGET_MODEL:
+            print(f"Loading {TARGET_MODEL} (stay_loaded mode)...")
+            subprocess.run(["lms", "load", TARGET_MODEL], check=True)
+            print(f"{TARGET_MODEL} locked and loaded!")
+        elif TARGET_MODEL:
+            print(f"Target model {TARGET_MODEL} loaded on-demand (stay_loaded is False)...")
 
     except FileNotFoundError:
         print("\nERROR: 'lms' command not found.")
@@ -274,8 +286,12 @@ def start_lm_studio():
 def ask_ai():
     user_query = request.form.get('question')
     if not user_query:
-        # Changed from redirect to jsonify
         return jsonify({"error": "No query provided"}), 400
+
+    if not STAY_LOADED and TARGET_MODEL:
+        print(f"Loading {TARGET_MODEL} on-demand...")
+        subprocess.run(["lms", "load", TARGET_MODEL], check=False)
+        time.sleep(2)
 
     # 1. RETRIEVE
     search_results = db.search("user_entries", user_query, limit=5)
@@ -341,9 +357,7 @@ def ask_ai():
         "retrieved_context": context_data
     })
 
-STAY_LOADED = False
-
-@ app.route('/api/chat/ask', methods=['POST'])
+@app.route('/api/chat/ask', methods=['POST'])
 def chat_ask():
     user_query = request.form.get('message')
     if not user_query:
@@ -400,6 +414,38 @@ def chat_ask():
         "context": context_data,
         "history": chat_session.get_history()
     })
+
+
+def set_model_loaded(loaded: bool):
+    global STAY_LOADED
+    STAY_LOADED = loaded
+    save_settings({"stay_loaded": loaded})
+    if loaded:
+        print(f"Loading {TARGET_MODEL}...")
+        subprocess.run(["lms", "load", TARGET_MODEL], check=False)
+        time.sleep(2)
+        print(f"{TARGET_MODEL} loaded and staying in memory.")
+    else:
+        print(f"Unloading {TARGET_MODEL}...")
+        subprocess.run(["lms", "unload", TARGET_MODEL], check=False)
+        print(f"{TARGET_MODEL} unloaded.")
+
+
+@app.route('/api/model/loading_mode', methods=['GET', 'PATCH'])
+def model_loading_mode():
+    if request.method == 'GET':
+        return jsonify({"stay_loaded": STAY_LOADED})
+
+    data = request.json
+    if data is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    stay_loaded = data.get("stay_loaded")
+    if stay_loaded is None:
+        return jsonify({"error": "stay_loaded field required"}), 400
+
+    set_model_loaded(bool(stay_loaded))
+    return jsonify({"stay_loaded": STAY_LOADED})
 
 
 @app.route('/api/chat/clear', methods=['POST'])
