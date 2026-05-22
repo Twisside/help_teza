@@ -4,11 +4,12 @@ from datetime import datetime
 
 
 class ChatSession:
-    def __init__(self, db, max_window=10, state_path="./conversation_state.json"):
+    def __init__(self, db, max_window=10, state_path="./conversation_state.json", preprocessor=None):
         self.db = db
         self.max_window = max_window
         self.state_path = state_path
         self.messages = []
+        self.preprocessor = preprocessor
 
     def add_message(self, role: str, content: str) -> None:
         self.messages.append({
@@ -33,6 +34,8 @@ class ChatSession:
 
     def build_system_prompt(self, query: str, context_results: dict) -> str:
         now = datetime.now()
+        query_had_time_trigger = self.preprocessor and self.preprocessor.should_preprocess(query)
+
         system_parts = [
             f"You are a helpful assistant. The current date and time is {now}.",
             "Answer the user's question based ONLY on the provided context.",
@@ -50,6 +53,10 @@ class ChatSession:
             timestamp = payload.get("timestamp", "Unknown Date")
             filename = payload.get("filename", "Manual Entry")
             score = res["score"]
+
+            if query_had_time_trigger:
+                content = self.preprocessor.preprocess_chunk(content, timestamp)
+
             context_lines.append(f"[Doc Score: {score:.2f}] [Recorded: {timestamp}] [Source: {filename}]\n{content}")
 
         for res in context_results.get("conversation_archive", []):

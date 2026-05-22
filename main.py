@@ -14,6 +14,7 @@ from file_manager import FileManager
 from index_worker import UniversalBackgroundIndexer
 from tag_generation import generate_tags_with_llm
 from chat_handle import ChatSession
+from preprocessor import TimeAwarePreprocessor
 
 app = Flask(__name__)
 
@@ -50,7 +51,8 @@ EMBEDDING_MODEL ="text-embedding-embeddinggemma-300m@q4_0" #< ==================
 db = QdrantRepo(use_qwen=False) #8187
 db.connect()
 
-chat_session = ChatSession(db)
+preprocessor = TimeAwarePreprocessor()
+chat_session = ChatSession(db, preprocessor=preprocessor)
 
 doc_chunker = DocumentChunker()
 doc_parser = UniversalParser(doc_chunker)
@@ -286,8 +288,11 @@ def ask_ai():
         subprocess.run(["lms", "load", TARGET_MODEL], check=False)
         time.sleep(2)
 
-    # 1. RETRIEVE
-    search_results = db.search("user_entries", user_query, limit=5)
+# 1. RETRIEVE
+    query_had_time_trigger = preprocessor.should_preprocess(user_query)
+    search_query = preprocessor.preprocess_query(user_query) if query_had_time_trigger else user_query
+
+    search_results = db.search("user_entries", search_query, limit=5)
     high_quality = [res for res in search_results if res['score'] > 0.5]
     new_results = high_quality if len(high_quality) >= 3 else search_results[:3]
 
@@ -297,6 +302,9 @@ def ask_ai():
         content = res['payload']['content']
         date = res['payload'].get('timestamp', 'Unknown Date')
         source = res['payload'].get('filename', 'Manual Entry')
+
+        if query_had_time_trigger:
+            content = preprocessor.preprocess_chunk(content, date)
 
         formatted_chunk = f"[Recorded on: {date}] [Source: {source}]\nContent: {content}"
         context_items.append(formatted_chunk)
