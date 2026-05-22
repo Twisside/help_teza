@@ -120,26 +120,31 @@ class QdrantRepo(DatabaseInterface):
                 vector=vector,
                 payload={"tag_name": tag_name}
             )]
-        )
+)
 
 
     def insert(self, collection, data):
         target_col = self.collection_name
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # --- NEW: Add Timestamp ---
-        # Using ISO format for clean sorting and human readability
+        print(f"[{ts}] DB: Starting insert for file: {data.get('filename', 'unknown')}")
+
         if "timestamp" not in data:
             data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         text_to_embed = data.get("content", "")
+        print(f"[{ts}] DB: Calling embed_text for: {data.get('filename', 'unknown')}")
         vector = self.embedder.embed_text(text_to_embed, is_query=False)
+        print(f"[{ts}] DB: Embedding received for: {data.get('filename', 'unknown')}")
 
         point = models.PointStruct(
             id=str(uuid.uuid4()),
             vector=vector,
             payload=data
         )
-        return self.client.upsert(collection_name=target_col, points=[point])
+        result = self.client.upsert(collection_name=target_col, points=[point])
+        print(f"[{ts}] DB: Upsert complete for: {data.get('filename', 'unknown')}")
+        return result
 
     def update(self, collection, item_id, new_data):
         target_col = self.collection_name

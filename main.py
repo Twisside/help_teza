@@ -27,7 +27,7 @@ def load_settings():
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
             pass
-    return {"stay_loaded": False, "target_model": None}
+    return {"stay_loaded": True, "target_model": None}
 
 def save_settings(settings):
     with open(SETTINGS_FILE, "w") as f:
@@ -98,6 +98,22 @@ def home():
 
     return render_template('home.html', entries=all_entries, is_search=bool(query), error=error_msg)
 
+def process_and_index_file(filepath, filename, tags_list=None):
+    def _ts():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    print(f"[{_ts()}] MANUAL: Starting processing {filename}")
+    text_chunks = doc_parser.process_file(filepath)
+    for i, chunk in enumerate(text_chunks):
+        db.insert("user_entries", {
+            "content": chunk,
+            "tags": tags_list if tags_list else ['untagged'],
+            "filename": filename,
+            "chunk_index": i
+        })
+    print(f"[{_ts()}] MANUAL: Completed processing {filename}")
+    return len(text_chunks)
+
+
 @app.route('/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
@@ -105,17 +121,14 @@ def upload_file():
 
     file = request.files['file']
 
-    # Apply the same tag parsing to file uploads
     raw_tags = request.form.get('tags', '')
     tags_list = [t.strip() for t in raw_tags.split(',') if t.strip()]
 
     if not tags_list:
-        # Automatic tagging implementation
         try:
-            # We read the file content early to generate the tags
             file.seek(0)
             content_preview = file.read().decode('utf-8', errors='ignore')[:1000]
-            file.seek(0)  # Reset file pointer for the saving process later
+            file.seek(0)
 
             print("No tags provided. Generating automatic tags...")
             tags_list = generate_tags_with_llm(content_preview)
@@ -126,45 +139,25 @@ def upload_file():
     if file.filename == '':
         return jsonify({"error": "No file selected."}), 400
 
-# ---------------------------there will be a better file system-----------------
     if file:
         filename = secure_filename(file.filename)
         _, ext = os.path.splitext(filename)
 
         if ext.lower() not in ALLOWED_EXTENSIONS:
             print(f"Blocked upload: Unsupported file type '{ext}'")
-            # Redirect back home, but attach the error to the URL
             return jsonify({"error": f"Unsupported file: {ext}. Allowed: PDF, TXT, MD, PY, JS, CS"}), 400
 
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
-# ------------------------------------------------------------------------------
         try:
             start_time = time.time()
             print(f"Processing {filename} with UniversalParser...")
 
-            # 1. Let the UniversalParser handle opening the file correctly
-            # based on its extension, extracting the text, and chunking it.
-            text_chunks = doc_parser.process_file(filepath)
+            chunks_count = process_and_index_file(filepath, filename, tags_list)
 
-            if not text_chunks:
-                print(f"Warning: No valid text could be extracted from {filename}")
-                return jsonify({"error": "Could not extract readable text from that file."}), 400
-
-            print(f"Created {len(text_chunks)} chunks. Embedding now...")
-
-            for i, chunk in enumerate(text_chunks):
-                print(f"Embedding chunk {i + 1}/{len(text_chunks)}...")
-                db.insert("user_entries", {
-                    "content": chunk,
-                    "tags": tags_list,
-                    "filename": filename,
-                    "filepath": filepath,
-                    "chunk_index": i
-                })
             process_time = time.time() - start_time
             print(f">>>Upload and embedding complete in {process_time:.2f} seconds")
-            return jsonify({"status": "success", "message": f"{filename} embedded in {process_time:.2f}s!"})
+            return jsonify({"status": "success", "message": f"{filename} ({chunks_count} chunks) embedded in {process_time:.2f}s!"})
 
         except Exception as e:
             print(f"Error processing or embedding file {filename}: {e}")
@@ -215,7 +208,7 @@ def save_dirs():
 
 
 # Initialize the worker
-bg_indexer = UniversalBackgroundIndexer(db, doc_chunker)
+bg_indexer = UniversalBackgroundIndexer(db, doc_chunker, STAY_LOADED)
 
 @app.route('/api/indexer_status')
 def indexer_status():
@@ -482,4 +475,4 @@ if __name__ == "__main__":
 
     start_lm_studio()
 
-    app.run(debug=True, use_reloader=False)
+    app.run(debug=True, use_reloader=False, threaded=True)

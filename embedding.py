@@ -1,4 +1,4 @@
-﻿import requests
+import requests
 from abc import ABC, abstractmethod
 
 
@@ -24,8 +24,11 @@ class LMSEmbeddingService(EmbeddingService):
         self._dim = dimension
         self.base_url = base_url
 
+    def _ts(self):
+        from datetime import datetime
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
     def embed_text(self, text: str, is_query: bool = True) -> list[float]:
-        # Some models benefit from a prompt prefix. Adjust as needed for your specific model.
         prefix = "search_query: " if is_query else "search_document: "
         full_text = f"{prefix}{text}"
 
@@ -36,16 +39,15 @@ class LMSEmbeddingService(EmbeddingService):
         }
 
         try:
+            print(f"[{self._ts()}] EMBED: Requesting embedding for text (len={len(text)})")
             response = requests.post(url, json=payload)
-            response.raise_for_status()  # Raise an exception for bad status codes
-
-            # LM Studio returns OpenAI-compatible JSON
+            response.raise_for_status()
             data = response.json()
+            print(f"[{self._ts()}] EMBED: Received embedding response")
             return data['data'][0]['embedding']
 
         except requests.exceptions.RequestException as e:
             print(f"Error fetching embedding from LM Studio: {e}")
-            # Depending on your architecture, you might want to return an empty list or raise the error
             raise e
 
     @property

@@ -120,6 +120,19 @@
         </div>
     </div>
 
+    <div id="indexer-completion-banner" style="display: none; background: #dcfce7; border: 1px solid #86efac; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="height: 12px; width: 12px; background: #16a34a; border-radius: 50%; display: inline-block;"></span>
+                <span id="completion-status-text" style="font-weight: bold; color: #15803d;">Queue Complete!</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 20px;">
+                <span id="completion-files" style="color: #166534;"></span>
+                <span id="completion-time" style="color: #166534;"></span>
+            </div>
+        </div>
+    </div>
+
     <div class="panel" style="border-left: 5px solid #16a34a;">
         <h3>Chat Session
             <div style="float: right; display: flex; align-items: center; gap: 10px;">
@@ -244,8 +257,8 @@
                 'types': { 'default': { 'icon': 'jstree-folder' } }
             });
 
-            // Check worker status once on load
-            updateIndexerStatus();
+            // Check worker status once on load - only start polling if there's an active batch
+            checkAndStartPolling();
 
             // Folder Selection Indexing
             $('#save-directories').on('click', function() {
@@ -267,7 +280,6 @@
                     $('#loading-overlay').hide();
                     alert(data.message);
                     updateIndexerStatus();
-                    startStatusPolling();
                 });
             });
 
@@ -289,23 +301,57 @@
                 .then(res => res.json())
                 .then(data => {
                     updateUI(data);
-                    if (data.queue_size === 0 && !data.manual_pause) stopStatusPolling();
-                    else startStatusPolling();
+                    if (data.queue_complete && data.queue_size === 0) {
+                        stopStatusPolling();
+                    } else if (data.queue_size > 0 || data.manual_pause) {
+                        startStatusPolling();
+                    }
                 })
                 .catch(err => console.error("Indexer Status unreachable."));
         }
 
+        function checkAndStartPolling() {
+            fetch('/api/indexer_status')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.has_been_indexed && (data.queue_size > 0 || data.manual_pause)) {
+                        startStatusPolling();
+                    }
+                });
+        }
+
         function updateUI(data) {
             const bar = document.getElementById('indexer-status-bar');
+            const completionBanner = document.getElementById('indexer-completion-banner');
             const btn = document.getElementById('pause-btn');
             const mode = document.getElementById('mode-text');
             const statusText = document.getElementById('status-text');
             const statusIcon = document.getElementById('status-icon');
             const queueDisplay = document.getElementById('queue-count');
+            const completionFiles = document.getElementById('completion-files');
+            const completionTime = document.getElementById('completion-time');
+            const completionStatusText = document.getElementById('completion-status-text');
 
-            if (data.queue_size > 0 || data.manual_pause) {
+            if (data.queue_complete && data.queue_size === 0) {
+                if (data.has_been_indexed) {
+                    const mins = Math.floor(data.completion_time / 60);
+                    const secs = Math.floor(data.completion_time % 60);
+                    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                    bar.style.display = 'none';
+                    completionBanner.style.display = 'block';
+                    completionStatusText.innerText = `Queue Complete!`;
+                    completionFiles.innerText = `${data.files_indexed} files`;
+                    completionTime.innerText = `Completed in ${timeStr}`;
+                } else {
+                    bar.style.display = 'none';
+                    completionBanner.style.display = 'none';
+                }
+            } else if (data.queue_size > 0 || data.manual_pause) {
                 bar.style.display = 'block';
-                queueDisplay.innerText = data.queue_size;
+                completionBanner.style.display = 'none';
+                bar.style.background = "#fffbeb";
+                bar.style.borderColor = "#f59e0b";
+                btn.style.display = 'block';
 
                 if (data.manual_pause) {
                     statusText.innerText = "Indexer PAUSED";
@@ -314,16 +360,19 @@
                     btn.innerText = "Resume Indexer";
                     btn.style.background = "#16a34a";
                     mode.innerText = "System waiting for user to resume...";
-                } else {
-                    statusText.innerText = "Indexer Processing...";
+                    queueDisplay.innerText = data.batch_files > 0 ? data.batch_files : data.queue_size;
+                } else if (data.processing_file) {
+                    statusText.innerText = `Processing: ${data.processing_file}`;
                     statusText.style.color = "#92400e";
                     statusIcon.style.background = "#16a34a";
                     btn.innerText = "Pause Indexer";
                     btn.style.background = "#dc2626";
                     mode.innerText = data.throttled ? "Mode: High System Load (Throttled to 10%)" : "Mode: System Idle (Optimized to 60%)";
+                    queueDisplay.innerText = data.queue_size;
                 }
             } else {
                 bar.style.display = 'none';
+                completionBanner.style.display = 'none';
             }
         }
 

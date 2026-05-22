@@ -1,6 +1,7 @@
 from datetime import datetime
+import collections
+import subprocess
 import threading
-import queue
 import time
 import os
 import psutil
@@ -9,31 +10,42 @@ from document_parser import UniversalParser
 from tag_generation import generate_tags_with_llm
 
 
+def _ts():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
 class UniversalBackgroundIndexer:
-    def __init__(self, db, doc_chunker):
+    def __init__(self, db, doc_chunker, stay_loaded=False):
         self.db = db
         self.doc_chunker = doc_chunker
-        self.task_queue = queue.Queue()
+        self.task_queue = collections.deque()
+        self.queue_lock = threading.Lock()
         self.is_running = True
+        self.stay_loaded = stay_loaded
+        self.batch_start_time = None
+        self.total_files = 0
+        self.batch_files = 0
 
         self.doc_parser = UniversalParser(doc_chunker)
 
-        # States
         self.manual_pause = False
-        self.system_busy = False # True if other apps are using high CPU/RAM
+        self.system_busy = False
 
-        # Thresholds (Measuring OTHER apps only)
-        self.OTHER_CPU_THRESHOLD = 30.0 # If others use >30%, we drop to 10% duty cycle
+        self.OTHER_CPU_THRESHOLD = 30.0
         self.OTHER_RAM_THRESHOLD = 80.0
+
+        self.queue_complete = True
+        self.completion_time = 0
+        self.files_completed = 0
+        self.has_been_indexed = False
+        self.processing_file = None
 
         self._apply_os_priority()
 
-        # Start the background worker thread
         self.worker_thread = threading.Thread(target=self._process_queue, daemon=True)
         self.worker_thread.start()
 
     def _apply_os_priority(self):
-        """Sets the OS-level priority to ensure we don't 'steal' cycles from games/apps."""
         p = psutil.Process(os.getpid())
         try:
             if os.name == 'nt':
@@ -44,125 +56,167 @@ class UniversalBackgroundIndexer:
             print(f"Priority Note: {e}")
 
     def add_to_queue(self, file_paths):
-        """The missing method: Takes a list of strings and adds them to the queue."""
         if not file_paths:
             return
-        for path in file_paths:
-            self.task_queue.put(path)
-        print(f"Queue updated. Total files waiting: {self.task_queue.qsize()}")
+        with self.queue_lock:
+            for path in file_paths:
+                self.task_queue.append(path)
+        self.total_files += len(file_paths)
+        self.batch_files += len(file_paths)
+        if self.batch_start_time is None:
+            self.batch_start_time = time.time()
+        self.queue_complete = False
+        self.has_been_indexed = True
+        self.files_completed = 0
+        with self.queue_lock:
+            queue_len = len(self.task_queue)
+        print(f"Queue updated. Added {len(file_paths)} files. Total: {queue_len}")
 
     def _get_resource_usage(self):
-        """Calculates current system pressure excluding this specific Python process."""
         total_cpu = psutil.cpu_percent(interval=0.1)
         process = psutil.Process(os.getpid())
 
-        # Get our app's CPU usage normalized across all cores
         with process.oneshot():
-            app_cpu = process.cpu_percent() / psutil.cpu_count()
+            cpu_count = psutil.cpu_count() or 1
+            app_cpu = process.cpu_percent() / cpu_count
 
         other_cpu = max(0, total_cpu - app_cpu)
         ram_usage = psutil.virtual_memory().percent
 
         return other_cpu, ram_usage
 
+    def _unload_embedding_model(self):
+        if self.stay_loaded:
+            return
+        embedding_model = "text-embedding-embeddinggemma-300m@q4_0"
+        print(f"Unloading embedding model: {embedding_model}...")
+        subprocess.run(["lms", "unload", embedding_model], check=False)
+
+    def _load_embedding_model(self):
+        if self.stay_loaded:
+            return
+        embedding_model = "text-embedding-embeddinggemma-300m@q4_0"
+        print(f"Loading embedding model: {embedding_model}...")
+        subprocess.run(["lms", "load", embedding_model], check=True)
+        print(f"Embedding model loaded.")
+
     def _process_queue(self):
         while self.is_running:
-            # Handle Manual Pause
             if self.manual_pause:
                 time.sleep(1)
                 continue
 
-            try:
-                # BLOCKING GET: The thread goes to sleep here and uses 0% CPU.
-                # It instantly wakes up when an item is added to the queue via add_to_queue().
-                # The 1-second timeout just lets it quickly loop back to check 'is_running' and 'manual_pause'.
-                filepath = self.task_queue.get(timeout=1.0)
-            except queue.Empty:
-                # Queue is empty, go right back to sleep
+            filepath = None
+            with self.queue_lock:
+                if not self.task_queue:
+                    if self.batch_start_time is not None and self.total_files > 0:
+                        total_time = time.time() - self.batch_start_time
+                        mins = int(total_time // 60)
+                        secs = int(total_time % 60)
+                        self.completion_time = total_time
+                        self.files_completed = self.total_files
+                        self.batch_files = 0
+                        self.total_files = 0
+                        self.batch_start_time = None
+                        self.queue_complete = True
+                        self.processing_file = None
+                        if not self.stay_loaded:
+                            self._unload_embedding_model()
+                        print(f">>>Queue fully processed! {self.files_completed} files indexed in {mins}m {secs}s")
+                    time.sleep(0.1)
+                    continue
+
+                filepath = self.task_queue.popleft()
+
+            if filepath is None:
+                time.sleep(0.1)
                 continue
 
-            # --- WE ONLY REACH THIS POINT IF A FILE IS ACTIVELY BEING PROCESSED ---
+            self.processing_file = os.path.basename(filepath)
 
-            # Check system pressure ONLY when we are about to manage data
+            print(f"[{_ts()}] WORKER: Dequeued file: {os.path.basename(filepath)}")
+
             other_cpu, ram_usage = self._get_resource_usage()
 
-            # Dynamic Throttling Logic (10% vs 60%)
             if other_cpu > self.OTHER_CPU_THRESHOLD or ram_usage > self.OTHER_RAM_THRESHOLD:
-                target_duty_cycle = 0.10 # Limit to 10% of time
+                target_duty_cycle = 0.10
                 self.system_busy = True
             else:
-                target_duty_cycle = 0.60 # Limit to 60% of time
+                target_duty_cycle = 1.0
                 self.system_busy = False
 
-            # Measure how long the actual work takes
             start_work = time.time()
-            self._index_file(filepath)
+            print(f"[{_ts()}] WORKER: Starting index for {os.path.basename(filepath)}")
+            file_processed = self._index_file(filepath)
             work_duration = time.time() - start_work
-            print(f">>>The queue was processed in {work_duration:.2f} seconds")
+            filename = os.path.basename(filepath)
+            with self.queue_lock:
+                remaining = len(self.task_queue)
+            print(f">>>Indexed {filename} in {work_duration:.2f}s ({remaining} left)")
 
-            # Duty Cycle Math: (Work / TotalTime) = Target
+            if file_processed:
+                self.batch_files -= 1
+
+            if not self.stay_loaded:
+                print(f"[{_ts()}] WORKER: Unloading embedding model...")
+                self._unload_embedding_model()
+                time.sleep(0.5)
+                print(f"[{_ts()}] WORKER: Loading embedding model...")
+                self._load_embedding_model()
+                print(f"[{_ts()}] WORKER: Embedding model ready.")
+
             sleep_duration = (work_duration / target_duty_cycle) - work_duration
-
-            # Ensure we don't sleep forever, but respect the throttle
             time.sleep(max(0.1, sleep_duration))
 
-            self.task_queue.task_done()
-
-
-
     def _index_file(self, filepath):
+        filename = os.path.basename(filepath)
+        print(f"[{_ts()}] INDEX: Beginning file indexing: {filename}")
         try:
-            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read()
-            if not content.strip(): return
-
-            # 1. ONE LINE handles Tika, HTML Tables, Tree-sitter, and Langchain!
             chunks = self.doc_parser.process_file(filepath)
-
             if not chunks:
-                return  # Skip empty or failed files
+                return False
 
-            # 2. Get file context for tags (using the first chunk as representative context)
-            file_context = chunks[0][:1000] # Use the start of the file for context
+            file_context = chunks[0][:1000]
+            print(f"[{_ts()}] INDEX: Calling embed_text for context (file: {filename})")
             context_vector = self.db.embedder.embed_text(file_context)
-
-            # 3. Search for existing tags (> 0.8)
             assigned_tags = self.db.get_semantic_tags(context_vector, threshold=0.8)
 
-            # 4. If no tags found, generate new ones
             if not assigned_tags:
-                print(f"No matching tags for {os.path.basename(filepath)}. Generating...")
-                new_tags = generate_tags_with_llm(file_context)
-                for nt in new_tags:
-                    self.db.add_new_tag(nt)
-                    assigned_tags.append(nt)
+                print(f"[{_ts()}] INDEX: No matching tags for {filename}. Generating new tags...")
+                new_tags = generate_tags_with_llm(file_context, self.stay_loaded)
+                if new_tags == ["auto-categorized"]:
+                    assigned_tags = new_tags
+                else:
+                    for nt in new_tags:
+                        self.db.add_new_tag(nt)
+                    assigned_tags.extend(new_tags)
 
-            # 5. Chunk and Index
-            chunks = self.doc_chunker.chunk_document(content)
             for i, chunk in enumerate(chunks):
-                if self.manual_pause: break
-
-                # OPTIONAL: Add chunk-specific tagging if it's long enough
-                chunk_tags = list(assigned_tags)
-                if len(chunk.split()) > 50:
-                    # Semantic search for chunk-specific tags from existing pool
-                    cv = self.db.embedder.embed_text(chunk)
-                    specific = self.db.get_semantic_tags(cv, threshold=0.85)
-                    chunk_tags = list(set(chunk_tags + specific))
-
+                if self.manual_pause:
+                    break
                 self.db.insert("user_entries", {
                     "content": chunk,
-                    "tags": chunk_tags,
-                    "filename": os.path.basename(filepath),
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    "tags": assigned_tags,
+                    "filename": filename,
+                    "chunk_index": i
                 })
+            print(f"[{_ts()}] INDEX: Completed indexing {filename}")
+            return True
         except Exception as e:
-            print(f"Tagging/Indexing Error: {e}")
+            print(f"Indexing Error for {filename}: {e}")
+            return False
 
     def get_status(self):
-        """Used by the Flask API to update the UI status bar."""
+        with self.queue_lock:
+            qsize = len(self.task_queue)
         return {
-            "queue_size": self.task_queue.qsize(),
+            "queue_size": qsize,
             "manual_pause": self.manual_pause,
-            "throttled": self.system_busy
+            "throttled": self.system_busy,
+            "queue_complete": self.queue_complete,
+            "files_indexed": self.files_completed,
+            "batch_files": self.batch_files,
+            "completion_time": self.completion_time,
+            "has_been_indexed": self.has_been_indexed,
+            "processing_file": self.processing_file
         }
