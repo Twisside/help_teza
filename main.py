@@ -58,6 +58,14 @@ doc_chunker = DocumentChunker()
 doc_parser = UniversalParser(doc_chunker)
 
 
+def is_model_loaded(model_name: str) -> bool:
+    try:
+        result = subprocess.run(["lms", "ps"], capture_output=True, text=True, check=False)
+        return model_name in result.stdout
+    except Exception:
+        return False
+
+
 @app.route('/', methods=['GET', 'POST'])
 def home():
     error_msg = request.args.get('error')
@@ -284,11 +292,16 @@ def ask_ai():
         return jsonify({"error": "No query provided"}), 400
 
     if not STAY_LOADED and TARGET_MODEL:
-        print(f"Loading {TARGET_MODEL} on-demand...")
-        subprocess.run(["lms", "load", TARGET_MODEL], check=False)
-        time.sleep(2)
+        if is_model_loaded(TARGET_MODEL):
+            print(f"{TARGET_MODEL} already loaded, skipping...")
+        else:
+            print(f"Loading {TARGET_MODEL} on-demand...")
+            result = subprocess.run(["lms", "load", TARGET_MODEL], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return jsonify({"error": f"Failed to load model: {result.stderr}"}), 500
+            time.sleep(2)
 
-# 1. RETRIEVE
+    # 1. RETRIEVE
     query_had_time_trigger = preprocessor.should_preprocess(user_query)
     search_query = preprocessor.preprocess_query(user_query) if query_had_time_trigger else user_query
 
@@ -369,9 +382,14 @@ def chat_ask():
         return jsonify({"error": "No message provided"}), 400
 
     if not STAY_LOADED and TARGET_MODEL:
-        print(f"Loading {TARGET_MODEL} on-demand...")
-        subprocess.run(["lms", "load", TARGET_MODEL], check=False)
-        time.sleep(2)
+        if is_model_loaded(TARGET_MODEL):
+            print(f"{TARGET_MODEL} already loaded, skipping...")
+        else:
+            print(f"Loading {TARGET_MODEL} on-demand...")
+            result = subprocess.run(["lms", "load", TARGET_MODEL], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                return jsonify({"error": f"Failed to load model: {result.stderr}"}), 500
+            time.sleep(2)
 
     chat_session.add_message("user", user_query)
 
@@ -430,10 +448,16 @@ def set_model_loaded(loaded: bool):
     STAY_LOADED = loaded
     save_settings({"stay_loaded": loaded})
     if loaded:
-        print(f"Loading {TARGET_MODEL}...")
-        subprocess.run(["lms", "load", TARGET_MODEL], check=False)
-        time.sleep(2)
-        print(f"{TARGET_MODEL} loaded and staying in memory.")
+        if is_model_loaded(TARGET_MODEL):
+            print(f"{TARGET_MODEL} already loaded, skipping...")
+        else:
+            print(f"Loading {TARGET_MODEL}...")
+            result = subprocess.run(["lms", "load", TARGET_MODEL], capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                print(f"Failed to load model: {result.stderr}")
+            else:
+                time.sleep(2)
+                print(f"{TARGET_MODEL} loaded and staying in memory.")
     else:
         print(f"Unloading {TARGET_MODEL}...")
         subprocess.run(["lms", "unload", TARGET_MODEL], check=False)
