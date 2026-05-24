@@ -330,7 +330,7 @@ def ask_ai():
             {"role": "user", "content": user_prompt}
         ],
         "temperature": 0.3
-    }
+}
 
     try:
         response = requests.post(lm_studio_url, json=payload)
@@ -342,6 +342,10 @@ def ask_ai():
 
     except requests.exceptions.RequestException as e:
         ai_answer = f"Network Error connecting to LM Studio: {e}"
+
+    if not STAY_LOADED and TARGET_MODEL:
+        print(f"Unloading {TARGET_MODEL}...")
+        subprocess.run(["lms", "unload", TARGET_MODEL], check=False)
 
     #Package the context data cleanly to send to the frontend via JSON
     context_data = [
@@ -382,7 +386,7 @@ def chat_ask():
         "model": TARGET_MODEL,
         "messages": messages,
         "temperature": 0.3
-    }
+}
 
     try:
         response = requests.post(lm_studio_url, json=payload)
@@ -392,6 +396,10 @@ def chat_ask():
             ai_answer = response.json()['choices'][0]['message']['content']
     except requests.exceptions.RequestException as e:
         ai_answer = f"Network Error connecting to LM Studio: {e}"
+
+    if not STAY_LOADED and TARGET_MODEL:
+        print(f"Unloading {TARGET_MODEL}...")
+        subprocess.run(["lms", "unload", TARGET_MODEL], check=False)
 
     chat_session.add_message("assistant", ai_answer)
     chat_session.save()
@@ -437,16 +445,17 @@ def model_loading_mode():
     if request.method == 'GET':
         return jsonify({"stay_loaded": STAY_LOADED})
 
-    data = request.json
-    if data is None:
-        return jsonify({"error": "Invalid JSON"}), 400
+    else:
+        data = request.json
+        if data is None:
+            return jsonify({"error": "Invalid JSON"}), 400
 
-    stay_loaded = data.get("stay_loaded")
-    if stay_loaded is None:
-        return jsonify({"error": "stay_loaded field required"}), 400
+        stay_loaded = data.get("stay_loaded")
+        if stay_loaded is None:
+            return jsonify({"error": "stay_loaded field required"}), 400
 
-    set_model_loaded(bool(stay_loaded))
-    return jsonify({"stay_loaded": STAY_LOADED})
+        set_model_loaded(bool(stay_loaded))
+        return jsonify({"stay_loaded": STAY_LOADED})
 
 
 @app.route('/api/chat/clear', methods=['POST'])
