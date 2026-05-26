@@ -179,7 +179,7 @@ def upload_file():
 
         if ext.lower() not in ALLOWED_EXTENSIONS:
             print(f"Blocked upload: Unsupported file type '{ext}'")
-            return jsonify({"error": f"Unsupported file: {ext}. Allowed: PDF, TXT, MD, PY, JS, CS"}), 400
+            return jsonify({"error": f"Unsupported file: {ext}. Allowed:txt, pdf, csv, tsv, py, js, cs, md, php, java, c, h, go, rs, scala"}), 400
 
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
