@@ -98,7 +98,16 @@
         <div id="directory-tree-container">
             <div id="directory_tree">Loading folders...</div>
         </div>
-        <button id="save-directories" style="margin-top: 15px; background: #4f46e5;">Index Selected Folders</button>
+<button id="save-directories" style="margin-top: 15px; background: #4f46e5;">Index Selected Folders</button>
+    </div>
+
+    <div class="panel" style="border-left: 5px solid #6366f1; padding: 12px 20px;">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span style="font-weight: bold; color: #333;">Model</span>
+            <select id="model-select" onchange="changeModel(this)" style="padding: 5px 10px; border-radius: 6px; border: 1px solid #ddd; font-size: 13px; min-width: 200px;">
+                <option value="">Loading...</option>
+            </select>
+        </div>
     </div>
 
     <div id="indexer-status-bar">
@@ -285,6 +294,7 @@
 
             loadChatHistory();
             loadModelToggleState();
+            loadModelList();
         });
 
         function togglePause() {
@@ -569,6 +579,60 @@ function uploadFile(event, form) {
                     }
                     container.scrollTop = container.scrollHeight;
                 });
+        }
+
+        function loadModelList() {
+            fetch('/api/models')
+                .then(res => res.json())
+                .then(data => {
+                    const select = document.getElementById('model-select');
+                    select.innerHTML = '';
+                    if (data.models.length === 0) {
+                        const opt = document.createElement('option');
+                        opt.value = '';
+                        opt.textContent = data.message || "No models available";
+                        select.appendChild(opt);
+                    } else {
+                        data.models.forEach(model => {
+                            const opt = document.createElement('option');
+                            opt.value = model;
+                            opt.textContent = model;
+                            select.appendChild(opt);
+                        });
+                        if (data.selected) {
+                            select.value = data.selected;
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error("Failed to load model list:", err);
+                });
+        }
+
+        function changeModel(select) {
+            const modelName = select.value;
+            if (!modelName) {
+                showDynamicMessage("Please select a model first.", true);
+                return;
+            }
+            fetch('/api/models', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_name: modelName })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    showDynamicMessage(data.error, true);
+                    loadModelList();
+                } else {
+                    showDynamicMessage(`Model switched to ${modelName}`, false);
+                }
+            })
+            .catch(err => {
+                showDynamicMessage("Failed to switch model: " + err.message, true);
+                loadModelList();
+            });
         }
 
         function loadModelToggleState() {

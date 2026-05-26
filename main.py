@@ -36,6 +36,7 @@ def save_settings(settings):
 
 settings = load_settings()
 STAY_LOADED = settings.get("stay_loaded", False)
+TARGET_MODEL = settings.get("target_model")
 
 # --- Setup Local File System Storage ----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---=-
 # will change it so search nad select through the file system
@@ -43,7 +44,6 @@ ALLOWED_EXTENSIONS = {'.txt', '.md', '.pdf', '.py', '.js', '.cs'}
 UPLOAD_FOLDER = './uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-TARGET_MODEL = "google/gemma-3-1b"
 EMBEDDING_MODEL ="text-embedding-embeddinggemma-300m@q4_0" #< ====================================================================
 # -=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---
 
@@ -291,6 +291,9 @@ def ask_ai():
     if not user_query:
         return jsonify({"error": "No query provided"}), 400
 
+    if not TARGET_MODEL:
+        return jsonify({"error": "No model selected. Please select a model from the dropdown."}), 400
+
     if not STAY_LOADED and TARGET_MODEL:
         if is_model_loaded(TARGET_MODEL):
             print(f"{TARGET_MODEL} already loaded, skipping...")
@@ -381,6 +384,9 @@ def chat_ask():
     if not user_query:
         return jsonify({"error": "No message provided"}), 400
 
+    if not TARGET_MODEL:
+        return jsonify({"error": "No model selected. Please select a model from the dropdown."}), 400
+
     if not STAY_LOADED and TARGET_MODEL:
         if is_model_loaded(TARGET_MODEL):
             print(f"{TARGET_MODEL} already loaded, skipping...")
@@ -446,9 +452,11 @@ def chat_ask():
 def set_model_loaded(loaded: bool):
     global STAY_LOADED
     STAY_LOADED = loaded
-    save_settings({"stay_loaded": loaded})
+    save_settings({"stay_loaded": loaded, "target_model": TARGET_MODEL})
     if loaded:
-        if is_model_loaded(TARGET_MODEL):
+        if TARGET_MODEL is None:
+            print("No model selected, cannot load.")
+        elif is_model_loaded(TARGET_MODEL):
             print(f"{TARGET_MODEL} already loaded, skipping...")
         else:
             print(f"Loading {TARGET_MODEL}...")
@@ -459,9 +467,10 @@ def set_model_loaded(loaded: bool):
                 time.sleep(2)
                 print(f"{TARGET_MODEL} loaded and staying in memory.")
     else:
-        print(f"Unloading {TARGET_MODEL}...")
-        subprocess.run(["lms", "unload", TARGET_MODEL], check=False)
-        print(f"{TARGET_MODEL} unloaded.")
+        if TARGET_MODEL:
+            print(f"Unloading {TARGET_MODEL}...")
+            subprocess.run(["lms", "unload", TARGET_MODEL], check=False)
+            print(f"{TARGET_MODEL} unloaded.")
 
 
 @app.route('/api/model/loading_mode', methods=['GET', 'PATCH'])
@@ -480,6 +489,67 @@ def model_loading_mode():
 
         set_model_loaded(bool(stay_loaded))
         return jsonify({"stay_loaded": STAY_LOADED})
+
+
+def get_available_models():
+    try:
+        result = subprocess.run(["lms", "ls"], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            return []
+
+        lines = result.stdout.split('\n')
+        models = []
+        in_llm_section = False
+
+        for line in lines:
+            line = line.strip()
+            if line.startswith('LLM '):
+                in_llm_section = True
+                continue
+            if line.startswith('EMBEDDING'):
+                break
+            if in_llm_section and line and not line.startswith('LLM') and not line.startswith('---'):
+                parts = line.split()
+                if parts:
+                    model_name = parts[0]
+                    if model_name not in ('PARAMS', 'ARCH', 'SIZE', 'DEVICE', 'DEVICE', ''):
+                        models.append(model_name)
+
+        return models
+    except Exception:
+        return []
+
+
+@app.route('/api/models', methods=['GET'])
+def get_models():
+    models = get_available_models()
+    return jsonify({
+        "models": models,
+        "selected": TARGET_MODEL,
+        "message": "Use `lms get` to download a model." if not models else None
+    })
+
+
+@app.route('/api/models', methods=['PATCH'])
+def set_model():
+    data = request.json
+    if data is None:
+        return jsonify({"error": "Invalid JSON"}), 400
+
+    model_name = data.get("model_name")
+    if not model_name:
+        return jsonify({"error": "model_name field required"}), 400
+
+    global TARGET_MODEL
+
+    if TARGET_MODEL and TARGET_MODEL != model_name and is_model_loaded(TARGET_MODEL):
+        print(f"Unloading previous model {TARGET_MODEL}...")
+        subprocess.run(["lms", "unload", TARGET_MODEL], check=False)
+
+    TARGET_MODEL = model_name
+    save_settings({"stay_loaded": STAY_LOADED, "target_model": TARGET_MODEL})
+
+    return jsonify({"selected": TARGET_MODEL, "models": get_available_models()})
 
 
 @app.route('/api/chat/clear', methods=['POST'])
