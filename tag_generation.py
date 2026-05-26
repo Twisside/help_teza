@@ -1,9 +1,23 @@
+import json
+import os
+
 import requests
 import subprocess
 import time
 from datetime import datetime
 
+SETTINGS_FILE = "./settings.json"
 
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {"stay_loaded": True, "target_model": None}
+
+settings = load_settings()
 def _ts():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -15,7 +29,7 @@ def generate_tags_with_llm(text_content, stay_loaded=False):
     needs_unload = False
     if not stay_loaded:
         print(f"[{_ts()}] TAG: Loading model for tag generation...")
-        result = subprocess.run(["lms", "load", "google/gemma-3-1b"], check=False)
+        result = subprocess.run(["lms", "load", settings.get("target_model")], check=False)
         if result.returncode != 0:
             print(f"[{_ts()}] TAG: Failed to load model for tag generation. Using default tags.")
             return ["auto-categorized"]
@@ -37,6 +51,6 @@ def generate_tags_with_llm(text_content, stay_loaded=False):
     finally:
         if needs_unload:
             print(f"[{_ts()}] TAG: Unloading model after tag generation...")
-            subprocess.run(["lms", "unload", "google/gemma-3-1b"], check=False)
+            subprocess.run(["lms", "unload", settings.get("target_model")], check=False)
 
     return tags

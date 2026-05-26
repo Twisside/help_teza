@@ -15,6 +15,8 @@ from index_worker import UniversalBackgroundIndexer
 from tag_generation import generate_tags_with_llm
 from chat_handle import ChatSession
 from preprocessor import TimeAwarePreprocessor
+from timing_metrics import record_file_upload, record_model_response
+from plotting import update_file_upload_plot, update_model_response_plot
 
 app = Flask(__name__)
 
@@ -37,14 +39,14 @@ def save_settings(settings):
 settings = load_settings()
 STAY_LOADED = settings.get("stay_loaded", False)
 TARGET_MODEL = settings.get("target_model")
-
+EMBEDDING_MODEL = "text-embedding-embeddinggemma-300m"
 # --- Setup Local File System Storage ----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---=-
 # will change it so search nad select through the file system
-ALLOWED_EXTENSIONS = {'.txt', '.md', '.pdf', '.py', '.js', '.cs'}
+ALLOWED_EXTENSIONS = {'.txt', '.md', '.pdf', '.py', '.js', '.cs', '.csv', '.tsv', '.json', '.xml', '.html', '.htm', '.sql', '.php', '.java', '.c', '.h', '.go', '.rs', '.scala'}
 UPLOAD_FOLDER = './uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-EMBEDDING_MODEL ="text-embedding-embeddinggemma-300m@q4_0" #< ====================================================================
+ #< ====================================================================
 # -=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=----=-=-=-=-=-=---=-==-=-=-==-=-=-=-=-=-=---
 
 
@@ -123,6 +125,28 @@ def process_and_index_file(filepath, filename, tags_list=None):
     print(f"[{_ts()}] MANUAL: Completed processing {filename}")
     return len(text_chunks)
 
+def process_and_index_file_timed(filepath, filename, tags_list=None):
+    def _ts():
+        return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    
+    parse_start = time.time()
+    print(f"[{_ts()}] MANUAL: Starting processing {filename}")
+    text_chunks = doc_parser.process_file(filepath)
+    parse_time = time.time() - parse_start
+    
+    embed_start = time.time()
+    for i, chunk in enumerate(text_chunks):
+        db.insert("user_entries", {
+            "content": chunk,
+            "tags": tags_list if tags_list else ['untagged'],
+            "filename": filename,
+            "chunk_index": i
+        })
+    embed_time = time.time() - embed_start
+    
+    print(f"[{_ts()}] MANUAL: Completed processing {filename}")
+    return len(text_chunks), parse_time, embed_time
+
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -163,11 +187,15 @@ def upload_file():
             start_time = time.time()
             print(f"Processing {filename} with UniversalParser...")
 
-            chunks_count = process_and_index_file(filepath, filename, tags_list)
+            chunks_count, parse_time, embed_time = process_and_index_file_timed(filepath, filename, tags_list)
 
-            process_time = time.time() - start_time
-            print(f">>>Upload and embedding complete in {process_time:.2f} seconds")
-            return jsonify({"status": "success", "message": f"{filename} ({chunks_count} chunks) embedded in {process_time:.2f}s!"})
+            total_time = time.time() - start_time
+            print(f">>>Upload and embedding complete in {total_time:.2f} seconds")
+            
+            record_file_upload(filename, chunks_count, parse_time, embed_time, 0, total_time)
+            update_file_upload_plot()
+            
+            return jsonify({"status": "success", "message": f"{filename} ({chunks_count} chunks) embedded in {total_time:.2f}s!"})
 
         except Exception as e:
             print(f"Error processing or embedding file {filename}: {e}")
@@ -255,10 +283,6 @@ def toggle_pause():
 # Feature flag for your future model.
 # Once you download a model (e.g., 'lms get qwen3-coder'), put its name here.
 
-#  TODO:
-#   Will make a select menu of models in the future
-
-
 
 def start_lm_studio():
     print("Starting LM Studio API server in the background...")
@@ -308,7 +332,10 @@ def ask_ai():
     query_had_time_trigger = preprocessor.should_preprocess(user_query)
     search_query = preprocessor.preprocess_query(user_query) if query_had_time_trigger else user_query
 
+    retrieval_start = time.time()
     search_results = db.search("user_entries", search_query, limit=5)
+    retrieval_time = time.time() - retrieval_start
+    
     high_quality = [res for res in search_results if res['score'] > 0.5]
     new_results = high_quality if len(high_quality) >= 3 else search_results[:3]
 
@@ -348,6 +375,7 @@ def ask_ai():
         "temperature": 0.3
 }
 
+    generation_start = time.time()
     try:
         response = requests.post(lm_studio_url, json=payload)
 
@@ -358,6 +386,11 @@ def ask_ai():
 
     except requests.exceptions.RequestException as e:
         ai_answer = f"Network Error connecting to LM Studio: {e}"
+    generation_time = time.time() - generation_start
+    
+    total_time = retrieval_time + generation_time
+    record_model_response(user_query, retrieval_time, generation_time, total_time)
+    update_model_response_plot()
 
     if not STAY_LOADED and TARGET_MODEL:
         print(f"Unloading {TARGET_MODEL}...")
@@ -399,7 +432,9 @@ def chat_ask():
 
     chat_session.add_message("user", user_query)
 
+    retrieval_start = time.time()
     context_results = chat_session.search_context(user_query)
+    retrieval_time = time.time() - retrieval_start
 
     system_prompt = chat_session.build_system_prompt(user_query, context_results)
     conversation_history = chat_session.build_conversation_history()
@@ -412,6 +447,7 @@ def chat_ask():
         "temperature": 0.3
 }
 
+    generation_start = time.time()
     try:
         response = requests.post(lm_studio_url, json=payload)
         if response.status_code != 200:
@@ -420,6 +456,11 @@ def chat_ask():
             ai_answer = response.json()['choices'][0]['message']['content']
     except requests.exceptions.RequestException as e:
         ai_answer = f"Network Error connecting to LM Studio: {e}"
+    generation_time = time.time() - generation_start
+    
+    total_time = retrieval_time + generation_time
+    record_model_response(user_query, retrieval_time, generation_time, total_time)
+    update_model_response_plot()
 
     if not STAY_LOADED and TARGET_MODEL:
         print(f"Unloading {TARGET_MODEL}...")

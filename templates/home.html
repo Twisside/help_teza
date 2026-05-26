@@ -203,7 +203,7 @@
                 <p style="margin: 15px 0;">{{ item.content }}</p>
 
                 <div class="actions">
-                    <form onsubmit="updateEntry('{{ item.id }}', event, this)" style="display:flex; gap: 5px; flex-grow: 1; margin-right: 20px;">
+                    <form onsubmit="updateEntry('{{ item.id }}', event, this)" id="edit-form-{{ item.id }}" style="display:flex; gap: 5px; flex-grow: 1; margin-right: 20px;">
                         <input type="text" name="updated_content" placeholder="Edit content..." style="margin-bottom:0; font-size: 13px;">
                         <button type="submit" style="padding: 5px 10px; font-size: 12px; background: #6c757d;">Update</button>
                     </form>

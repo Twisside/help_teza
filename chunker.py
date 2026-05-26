@@ -22,11 +22,18 @@ class DocumentChunker:
 
         print(f"Chunker initialized: Max {self.max_chars} chars, Overlap {self.overlap_chars} chars.")
 
-        # Map file extensions to LangChain's syntax-aware splitters
         self.langchain_map = {
             ".py": Language.PYTHON,
             ".js": Language.JS,
             ".cs": Language.CSHARP,
+            ".md": Language.MARKDOWN,
+            ".php": Language.PHP,
+            ".java": Language.JAVA,
+            ".c": Language.C,
+            ".h": Language.C,
+            ".go": Language.GO,
+            ".rs": Language.RUST,
+            ".scala": Language.SCALA,
         }
 
         # Initialize Tree-sitter parsers for AST extraction
@@ -49,11 +56,18 @@ class DocumentChunker:
         """
         Creates a language-specific text splitter with overlapping capabilities.
         Uses the pre-calculated character limits.
+        Falls back to generic text splitter for unsupported extensions.
         """
-        lang = self.langchain_map.get(extension, Language.PYTHON)
+        lang = self.langchain_map.get(extension)
 
-        return RecursiveCharacterTextSplitter.from_language(
-            language=lang,
+        if lang:
+            return RecursiveCharacterTextSplitter.from_language(
+                language=lang,
+                chunk_size=self.max_chars,
+                chunk_overlap=self.overlap_chars
+            )
+
+        return RecursiveCharacterTextSplitter(
             chunk_size=self.max_chars,
             chunk_overlap=self.overlap_chars
         )

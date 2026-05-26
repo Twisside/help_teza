@@ -3,7 +3,7 @@ import os
 import uuid
 from abc import ABC, abstractmethod
 from dotenv import load_dotenv
-from pymongo import MongoClient
+
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from embedding import LMSEmbeddingService
@@ -33,39 +33,39 @@ class DatabaseInterface(ABC):
 
 
 
-class MongoRepo(DatabaseInterface):
-    def __init__(self, uri):
-        self.uri = uri
-        self.client = None
-
-    def connect(self):
-        self.client = MongoClient(self.uri)
-        return self.client
-
-    def insert(self, collection, data):
-        db = self.client.get_database()
-        return db[collection].insert_one(data)
-
-    def get_all(self, collection):
-        db = self.client.get_database()
-        return list(db[collection].find())
-
-    def update(self, collection, item_id, new_data):
-        from bson.objectid import ObjectId
-        db = self.client.get_database()
-        return db[collection].update_one({"_id": ObjectId(item_id)}, {"$set": new_data})
-
-    def delete(self, collection, item_id):
-        from bson.objectid import ObjectId
-        db = self.client.get_database()
-        return db[collection].delete_one({"_id": ObjectId(item_id)})
-
+# class MongoRepo(DatabaseInterface):
+#     def __init__(self, uri):
+#         self.uri = uri
+#         self.client = None
+#
+#     def connect(self):
+#         self.client = MongoClient(self.uri)
+#         return self.client
+#
+#     def insert(self, collection, data):
+#         db = self.client.get_database()
+#         return db[collection].insert_one(data)
+#
+#     def get_all(self, collection):
+#         db = self.client.get_database()
+#         return list(db[collection].find())
+#
+#     def update(self, collection, item_id, new_data):
+#         from bson.objectid import ObjectId
+#         db = self.client.get_database()
+#         return db[collection].update_one({"_id": ObjectId(item_id)}, {"$set": new_data})
+#
+#     def delete(self, collection, item_id):
+#         from bson.objectid import ObjectId
+#         db = self.client.get_database()
+#         return db[collection].delete_one({"_id": ObjectId(item_id)})
+#
 
 ##    ==================================== MAIN QDRANT ===========================================
 
 
 class QdrantRepo(DatabaseInterface):
-    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cpu"):
+    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cuda"):
         self.path = storage_path
         self.client = None
         self.device = device
@@ -203,10 +203,6 @@ class QdrantRepo(DatabaseInterface):
             limit=limit,
             with_payload=True
         )
-
-        # TODO:
-        #  will have to make displaying as a search with tag,
-        #  be able to search the tag and show all entries under it
 
         results = []
         for hit in response.points:
