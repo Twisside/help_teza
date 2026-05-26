@@ -1,5 +1,6 @@
 import os
 
+
 class FileManager:
     def __init__(self, base_path=None):
         # Default to the current project directory if no path is provided
@@ -32,35 +33,9 @@ class FileManager:
         except PermissionError:
             # Handle folders where the user doesn't have read access
             node["text"] += " (Access Denied)"
-            node["icon"] = "jstree-file" # Visual cue for locked folder
+            node["icon"] = "jstree-file"  # Visual cue for locked folder
 
         return node
-
-
-    # TODO:
-        # add more file extensions after added apache tika
-
-
-    def get_all_files_from_paths(self, paths):
-        """
-        Takes a list of directory paths and returns a list of individual file paths.
-        Filters for specific extensions to avoid indexing binaries or junk.
-        """
-        valid_extensions = ('.txt', '.md', '.py', '.js', '.c', '.cpp', '.html', '.css', '.json')
-        files_found = []
-
-        for path in paths:
-            if os.path.exists(path):
-                for root, dirs, files in os.walk(path):
-                    # Skip hidden directories like .git
-                    dirs[:] = [d for d in dirs if not d.startswith('.')]
-
-                    for file in files:
-                        if file.endswith(valid_extensions):
-                            files_found.append(os.path.join(root, file))
-
-        return files_found
-
 
     def save_selected_config(self, paths):
         """
@@ -70,3 +45,33 @@ class FileManager:
         print(f"DEBUG: Saving {len(paths)} paths to watch list...")
         # For now, we just return True
         return True
+
+    def get_all_files_from_paths(self, paths):
+        """
+        Recursively walks through a list of directory paths and returns a
+        flat list of all absolute file paths found inside them.
+        """
+        all_files = []
+
+        for path in paths:
+            if not os.path.exists(path):
+                print(f"Warning: Path does not exist - {path}")
+                continue
+
+            # If the path is a direct file, just add it
+            if os.path.isfile(path):
+                all_files.append(path)
+
+            # If the path is a directory, walk through it recursively
+            elif os.path.isdir(path):
+                for root, dirs, files in os.walk(path):
+                    # Ignore hidden folders (like .git, .venv, .idea) to save processing time
+                    dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+                    for file in files:
+                        # Ignore hidden files
+                        if not file.startswith('.'):
+                            full_file_path = os.path.join(root, file)
+                            all_files.append(full_file_path)
+
+        return all_files

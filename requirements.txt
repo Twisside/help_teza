@@ -6,3 +6,9 @@ sentence-transformers
 psutil
 datetime
 requests
+tree_sitter
+langchain_text_splitters
+tree_sitter_python
+tree_sitter_javascript
+tree_sitter_c_sharp
+pypdf

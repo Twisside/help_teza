@@ -1,9 +1,11 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Local RAG Assistant</title>
+
+    <link rel="shortcut icon" href="data:image/x-icon;," type="image/x-icon">
 
     <style>
         /* General Layout */
@@ -29,13 +31,31 @@
         /* Directory Tree */
         #directory-tree-container { max-height: 350px; overflow-y: auto; background: #fff; padding: 15px; border: 1px solid #ddd; border-radius: 8px; }
 
-        /* Loading Overlay */
+        /* Loading Overlay - Directory indexing only */
         #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 255, 255, 0.9); z-index: 9999; text-align: center; padding-top: 20vh; }
         .spinner { border: 6px solid #f3f3f3; border-top: 6px solid #0066cc; border-radius: 50%; width: 50px; height: 50px; animation: spin 1s linear infinite; margin: 0 auto 20px; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
+        /* Inline Button Spinner */
+        .btn-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+        button:disabled { opacity: 0.7; cursor: not-allowed; }
+
         /* Persistent Indexer Status Bar */
         #indexer-status-bar { display: none; background: #fffbeb; border: 1px solid #f59e0b; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+
+        /* Chat Messages */
+        .chat-message { max-width: 80%; padding: 10px 15px; border-radius: 12px; margin-bottom: 10px; word-wrap: break-word; }
+        .chat-user { background: #0066cc; color: white; margin-left: auto; border-bottom-right-radius: 4px; }
+        .chat-assistant { background: #e9ecef; color: #333; margin-right: auto; border-bottom-left-radius: 4px; }
+        .chat-meta { font-size: 10px; opacity: 0.7; margin-top: 4px; }
+
+        /* Toggle Switch */
+        .toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: 0.3s; border-radius: 24px; }
+        .toggle-slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: 0.3s; border-radius: 50%; }
+        input:checked + .toggle-slider { background-color: #16a34a; }
+        input:checked + .toggle-slider:before { transform: translateX(20px); }
     </style>
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/themes/default/style.min.css" />
@@ -51,19 +71,23 @@
 
     <div class="panel">
         <h3>Add Knowledge</h3>
+
+        <div id="dynamic-message-banner" style="display: none; padding: 12px; border-radius: 6px; margin-bottom: 20px; font-size: 14px; font-weight: bold; align-items: center; gap: 8px;">
+        </div>
+
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-            <form method="POST" action="/">
+<form id="manual-form" onsubmit="addManualEntry(event, this)">
                 <strong>Manual Text Entry</strong>
                 <input type="text" name="user_input" placeholder="Type knowledge here..." required>
                 <input type="text" name="tags" placeholder="Tags (comma separated)">
-                <button type="submit">Add Entry</button>
+                <button type="submit" id="add-entry-btn">Add Entry</button>
             </form>
 
-            <form id="upload-form" action="/upload" method="POST" enctype="multipart/form-data">
-                <strong>Upload File (.txt)</strong>
-                <input type="file" name="file" accept=".txt" required>
+            <form id="upload-form" onsubmit="uploadFile(event, this)">
+                <strong>Upload File</strong>
+                <input type="file" name="file" accept=".pdf,.txt,.md,.py,.js,.cs" required>
                 <input type="text" name="tags" placeholder="Tags (e.g. finance, thesis)">
-                <button type="submit" style="background: #28a745;">Upload & Index</button>
+                <button type="submit" id="upload-btn" style="background: #28a745;">Upload & Index</button>
             </form>
         </div>
     </div>
@@ -74,7 +98,16 @@
         <div id="directory-tree-container">
             <div id="directory_tree">Loading folders...</div>
         </div>
-        <button id="save-directories" style="margin-top: 15px; background: #4f46e5;">Index Selected Folders</button>
+<button id="save-directories" style="margin-top: 15px; background: #4f46e5;">Index Selected Folders</button>
+    </div>
+
+    <div class="panel" style="border-left: 5px solid #6366f1; padding: 12px 20px;">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span style="font-weight: bold; color: #333;">Model</span>
+            <select id="model-select" onchange="changeModel(this)" style="padding: 5px 10px; border-radius: 6px; border: 1px solid #ddd; font-size: 13px; min-width: 200px;">
+                <option value="">Loading...</option>
+            </select>
+        </div>
     </div>
 
     <div id="indexer-status-bar">
@@ -96,32 +129,50 @@
         </div>
     </div>
 
+    <div id="indexer-completion-banner" style="display: none; background: #dcfce7; border: 1px solid #86efac; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <span style="height: 12px; width: 12px; background: #16a34a; border-radius: 50%; display: inline-block;"></span>
+                <span id="completion-status-text" style="font-weight: bold; color: #15803d;">Queue Complete!</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 20px;">
+                <span id="completion-files" style="color: #166534;"></span>
+                <span id="completion-time" style="color: #166534;"></span>
+            </div>
+        </div>
+    </div>
+
     <div class="panel" style="border-left: 5px solid #16a34a;">
-        <h3>Ask your Documents</h3>
-        <form method="POST" action="/ask">
-            <input type="text" name="question" placeholder="What is mentioned about...?" required>
-            <button type="submit" style="background: #16a34a; width: 100%;">Generate AI Response</button>
+        <h3>Chat Session
+            <div style="float: right; display: flex; align-items: center; gap: 10px;">
+                <span style="font-size: 13px; font-weight: normal; color: #666;">Stay Loaded</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="stay-loaded-toggle" onchange="toggleModelLoading(this)">
+                    <span class="toggle-slider"></span>
+                </label>
+                <button id="clear-chat-btn" onclick="clearChat()" style="background: #dc2626; padding: 5px 15px; font-size: 12px;">Clear Chat</button>
+            </div>
+        </h3>
+
+        <div id="chat-messages" style="height: 400px; overflow-y: auto; border: 1px solid #e1e4e8; border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #fafafa;">
+            <div id="chat-empty" style="text-align: center; color: #999; padding-top: 150px;">No messages yet. Start a conversation!</div>
+        </div>
+
+        <form id="chat-form" onsubmit="sendChatMessage(event)" style="display: flex; gap: 10px;">
+            <input type="text" id="chat-input" name="message" placeholder="Ask anything about your documents..." required style="flex-grow: 1; margin-bottom: 0;">
+            <button type="submit" id="chat-btn" style="background: #16a34a; white-space: nowrap;">Send</button>
+        </form>
+    </div>
+
+    <div class="panel" style="border-left: 5px solid #0066cc;">
+        <h3>Quick AI Query</h3>
+
+        <form id="ask-form" onsubmit="askAI(event)" style="display: flex; gap: 10px;">
+            <input type="text" name="question" placeholder="What is mentioned about...?" required style="flex-grow: 1;">
+            <button type="submit" id="ask-btn" style="background: #0066cc; white-space: nowrap;">Generate AI Response</button>
         </form>
 
-        {% if ai_answer %}
-            <div style="background: #f0fff4; padding: 20px; border-radius: 8px; margin-top: 20px; border: 1px solid #c6f6d5;">
-                <h4 style="margin-top: 0; color: #22543d;">AI Answer:</h4>
-                <p style="white-space: pre-wrap; color: #2d3748;">{{ ai_answer }}</p>
-
-                <details style="margin-top: 15px;">
-                    <summary style="cursor: pointer; font-size: 13px; color: #4a5568;">View Source Context</summary>
-                    <ul style="font-size: 12px; color: #718096; margin-top: 10px;">
-                        {% for ctx in retrieved_context %}
-                            <li>
-                                <strong>[Score {{ ctx.score|round(2) }}]</strong>
-                                <small>({{ ctx.payload.timestamp }})</small>:
-                                {{ ctx.payload.content | truncate(150) }}
-                            </li>
-                        {% endfor %}
-                    </ul>
-                </details>
-            </div>
-        {% endif %}
+        <div id="ai-response-container"></div>
     </div>
 
     <div class="panel">
@@ -136,7 +187,7 @@
         </form>
 
         {% for item in entries %}
-            <div class="entry-card">
+            <div class="entry-card" id="card-{{ item.id }}">
                 <div>
                     {% if item.tags %}
                         {% for t in item.tags %} <span class="tag-badge">{{ t }}</span> {% endfor %}
@@ -152,11 +203,11 @@
                 <p style="margin: 15px 0;">{{ item.content }}</p>
 
                 <div class="actions">
-                    <form action="/db/update/user_entries/{{ item.id }}" method="POST" style="display:flex; gap: 5px; flex-grow: 1; margin-right: 20px;">
+                    <form onsubmit="updateEntry('{{ item.id }}', event, this)" style="display:flex; gap: 5px; flex-grow: 1; margin-right: 20px;">
                         <input type="text" name="updated_content" placeholder="Edit content..." style="margin-bottom:0; font-size: 13px;">
                         <button type="submit" style="padding: 5px 10px; font-size: 12px; background: #6c757d;">Update</button>
                     </form>
-                    <a href="/db/delete/user_entries/{{ item.id }}" class="delete-link" onclick="return confirm('Delete this entry?')">Delete</a>
+                    <a href="javascript:void(0)" class="delete-link" onclick="deleteEntry('{{ item.id }}')">Delete</a>
                 </div>
             </div>
         {% else %}
@@ -168,7 +219,46 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.12/jstree.min.js"></script>
 
     <script>
+        // ==========================================
+        // UI Sync and Status Polling
+        // ==========================================
+        let statusInterval = null;
+
+        function startStatusPolling() {
+            if (!statusInterval) {
+                statusInterval = setInterval(updateIndexerStatus, 3000);
+            }
+        }
+
+        function stopStatusPolling() {
+            if (statusInterval) {
+                clearInterval(statusInterval);
+                statusInterval = null;
+            }
+        }
+
         $(function () {
+            // Restore AI Answer block from memory
+            const savedAI = sessionStorage.getItem('cached_ai_answer');
+            if (savedAI) {
+                document.getElementById('ai-response-container').innerHTML = savedAI;
+            }
+
+            // NEW: Smarter, form-specific memory for all text boxes
+            const textInputs = document.querySelectorAll('input[type="text"]');
+            textInputs.forEach(input => {
+                // Create a unique key based on the form's ID and the input's name
+                const formId = input.closest('form').id;
+                const storageKey = `cached_${formId}_${input.name}`;
+
+                if (sessionStorage.getItem(storageKey)) {
+                    input.value = sessionStorage.getItem(storageKey);
+                }
+                input.addEventListener('input', function() {
+                    sessionStorage.setItem(storageKey, this.value);
+                });
+            });
+
             // Initialize jsTree
             $('#directory_tree').jstree({
                 'core': { 'data': { 'url': '/api/get_directory_tree', 'dataType': 'json' } },
@@ -176,11 +266,10 @@
                 'types': { 'default': { 'icon': 'jstree-folder' } }
             });
 
-            // Start Syncing UI immediately
-            updateIndexerStatus();
-            setInterval(updateIndexerStatus, 3000);
+            // Check worker status once on load - only start polling if there's an active batch
+            checkAndStartPolling();
 
-            // Handle Folder Selection Indexing
+            // Folder Selection Indexing
             $('#save-directories').on('click', function() {
                 var selectedNodes = $('#directory_tree').jstree("get_selected", true);
                 var paths = selectedNodes.map(node => node.id);
@@ -199,42 +288,80 @@
                 .then(data => {
                     $('#loading-overlay').hide();
                     alert(data.message);
-                    updateIndexerStatus(); // Sync UI immediately
+                    updateIndexerStatus();
                 });
             });
 
-            // Upload loading trigger
-            $('#upload-form').on('submit', function() {
-                $('#loading-overlay').show();
-                $('.loading-text').text("Extracting and Embedding file...");
-            });
+            loadChatHistory();
+            loadModelToggleState();
+            loadModelList();
         });
 
-        // Background Indexer Sync Functions
         function togglePause() {
             fetch('/api/toggle_pause', { method: 'POST' })
                 .then(res => res.json())
-                .then(() => updateIndexerStatus());
+                .then(() => {
+                    updateIndexerStatus();
+                    if (!statusInterval) startStatusPolling();
+                });
         }
 
         function updateIndexerStatus() {
             fetch('/api/indexer_status')
                 .then(res => res.json())
-                .then(data => updateUI(data))
+                .then(data => {
+                    updateUI(data);
+                    if (data.queue_complete && data.queue_size === 0) {
+                        stopStatusPolling();
+                    } else if (data.queue_size > 0 || data.manual_pause) {
+                        startStatusPolling();
+                    }
+                })
                 .catch(err => console.error("Indexer Status unreachable."));
+        }
+
+        function checkAndStartPolling() {
+            fetch('/api/indexer_status')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.has_been_indexed && (data.queue_size > 0 || data.manual_pause)) {
+                        startStatusPolling();
+                    }
+                });
         }
 
         function updateUI(data) {
             const bar = document.getElementById('indexer-status-bar');
+            const completionBanner = document.getElementById('indexer-completion-banner');
             const btn = document.getElementById('pause-btn');
             const mode = document.getElementById('mode-text');
             const statusText = document.getElementById('status-text');
             const statusIcon = document.getElementById('status-icon');
             const queueDisplay = document.getElementById('queue-count');
+            const completionFiles = document.getElementById('completion-files');
+            const completionTime = document.getElementById('completion-time');
+            const completionStatusText = document.getElementById('completion-status-text');
 
-            if (data.queue_size > 0 || data.manual_pause) {
+            if (data.queue_complete && data.queue_size === 0) {
+                if (data.has_been_indexed) {
+                    const mins = Math.floor(data.completion_time / 60);
+                    const secs = Math.floor(data.completion_time % 60);
+                    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+                    bar.style.display = 'none';
+                    completionBanner.style.display = 'block';
+                    completionStatusText.innerText = `Queue Complete!`;
+                    completionFiles.innerText = `${data.files_indexed} files`;
+                    completionTime.innerText = `Completed in ${timeStr}`;
+                } else {
+                    bar.style.display = 'none';
+                    completionBanner.style.display = 'none';
+                }
+            } else if (data.queue_size > 0 || data.manual_pause) {
                 bar.style.display = 'block';
-                queueDisplay.innerText = data.queue_size;
+                completionBanner.style.display = 'none';
+                bar.style.background = "#fffbeb";
+                bar.style.borderColor = "#f59e0b";
+                btn.style.display = 'block';
 
                 if (data.manual_pause) {
                     statusText.innerText = "Indexer PAUSED";
@@ -243,17 +370,364 @@
                     btn.innerText = "Resume Indexer";
                     btn.style.background = "#16a34a";
                     mode.innerText = "System waiting for user to resume...";
-                } else {
-                    statusText.innerText = "Indexer Processing...";
+                    queueDisplay.innerText = data.batch_files > 0 ? data.batch_files : data.queue_size;
+                } else if (data.processing_file) {
+                    statusText.innerText = `Processing: ${data.processing_file}`;
                     statusText.style.color = "#92400e";
                     statusIcon.style.background = "#16a34a";
                     btn.innerText = "Pause Indexer";
                     btn.style.background = "#dc2626";
                     mode.innerText = data.throttled ? "Mode: High System Load (Throttled to 10%)" : "Mode: System Idle (Optimized to 60%)";
+                    queueDisplay.innerText = data.queue_size;
                 }
             } else {
                 bar.style.display = 'none';
+                completionBanner.style.display = 'none';
             }
+        }
+
+        // ==========================================
+        // Form Handling (No Reloads & Persistent)
+        // ==========================================
+
+        function showDynamicMessage(message, isError = false) {
+            const banner = document.getElementById('dynamic-message-banner');
+            banner.style.display = 'flex';
+            banner.innerHTML = `<span>${isError ? ' ! ' : ' ok '}</span> ${message}`;
+
+            if (isError) {
+                banner.style.color = '#dc2626';
+                banner.style.background = '#fee2e2';
+                banner.style.border = '1px solid #fca5a5';
+            } else {
+                banner.style.color = '#15803d';
+                banner.style.background = '#dcfce7';
+                banner.style.border = '1px solid #86efac';
+                setTimeout(() => { banner.style.display = 'none'; }, 4000);
+            }
+        }
+
+function addManualEntry(event, form) {
+            event.preventDefault();
+            const formData = new FormData(form);
+            const btn = document.getElementById('add-entry-btn');
+            const originalText = btn.innerText;
+            btn.innerHTML = '<span class="btn-spinner"></span>Adding...';
+            btn.disabled = true;
+
+            fetch('/', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+
+                    if (data.error) {
+                        showDynamicMessage(data.error, true);
+                    } else {
+                        form.reset();
+                        form.querySelectorAll('input[type="text"]').forEach(input => {
+                            sessionStorage.removeItem(`cached_${form.id}_${input.name}`);
+                        });
+                        showDynamicMessage(data.message, false);
+                    }
+                })
+                .catch(() => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    showDynamicMessage("Failed to add entry", true);
+                });
+        }
+
+function uploadFile(event, form) {
+            event.preventDefault();
+            const formData = new FormData(form);
+            const btn = document.getElementById('upload-btn');
+            const originalText = btn.innerText;
+            btn.innerHTML = '<span class="btn-spinner"></span>Processing...';
+            btn.disabled = true;
+
+            fetch('/upload', { method: 'POST', body: formData })
+                .then(async res => {
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || "Upload failed");
+                    return data;
+                })
+                .then(data => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+
+                    form.reset();
+                    form.querySelectorAll('input[type="text"]').forEach(input => {
+                        sessionStorage.removeItem(`cached_${form.id}_${input.name}`);
+                    });
+
+                    showDynamicMessage(data.message, false);
+                })
+                .catch(err => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    showDynamicMessage(err.message, true);
+                });
+        }
+
+        // ==========================================
+        // Knowledge Base Actions & AI Prompting
+        // ==========================================
+
+        function deleteEntry(id) {
+            if (!confirm('Delete this entry?')) return;
+            fetch(`/db/delete/user_entries/${id}`)
+                .then(res => res.json())
+                .then(data => {
+                    $(`#card-${id}`).fadeOut(300, function() { $(this).remove(); });
+                });
+        }
+
+        function updateEntry(id, event, form) {
+            event.preventDefault();
+            const formData = new FormData(form);
+            const btn = form.querySelector('button');
+            const originalText = btn.innerText;
+            const originalBg = btn.style.background;
+
+            btn.innerText = "Saving...";
+
+            fetch(`/db/update/user_entries/${id}`, { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    btn.innerText = "Saved!";
+                    btn.style.background = "#16a34a";
+                    setTimeout(() => {
+                        btn.innerText = originalText;
+                        btn.style.background = originalBg;
+                    }, 2000);
+                });
+        }
+
+        function askAI(event) {
+            event.preventDefault();
+            const form = document.getElementById('ask-form');
+            const formData = new FormData(form);
+            const container = document.getElementById('ai-response-container');
+            const btn = document.getElementById('ask-btn');
+
+            btn.innerText = "Thinking...";
+            btn.disabled = true;
+            btn.style.opacity = "0.7";
+
+            fetch('/ask', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    btn.innerText = "Generate AI Response";
+                    btn.disabled = false;
+                    btn.style.opacity = "1";
+
+                    let contextHtml = data.retrieved_context.map(ctx =>
+                        `<li><strong>[Score ${ctx.score}]</strong> <small>(${ctx.timestamp})</small>: ${ctx.content}...</li>`
+                    ).join('');
+
+                    let html = `
+                        <div style="background: #f0fff4; padding: 20px; border-radius: 8px; margin-top: 20px; border: 1px solid #c6f6d5; position: relative;">
+                            <button onclick="clearAI()" style="position: absolute; top: 10px; right: 10px; background: none; border: none; color: #718096; cursor: pointer; font-size: 16px;">✖</button>
+                            <h4 style="margin-top: 0; color: #22543d;">AI Answer:</h4>
+                            <p style="white-space: pre-wrap; color: #2d3748;">${data.ai_answer}</p>
+                            <details style="margin-top: 15px;">
+                                <summary style="cursor: pointer; font-size: 13px; color: #4a5568;">View Source Context</summary>
+                                <ul style="font-size: 12px; color: #718096; margin-top: 10px;">
+                                    ${contextHtml}
+                                </ul>
+                            </details>
+                        </div>
+                    `;
+
+                    container.innerHTML = html;
+                    sessionStorage.setItem('cached_ai_answer', html);
+                }).catch(err => {
+                    btn.innerText = "Generate AI Response";
+                    btn.disabled = false;
+                    btn.style.opacity = "1";
+                    alert("Error connecting to AI backend.");
+                });
+        }
+
+        function clearAI() {
+            document.getElementById('ai-response-container').innerHTML = '';
+            sessionStorage.removeItem('cached_ai_answer');
+
+            sessionStorage.removeItem('cached_ask-form_question');
+            document.querySelector('input[name="question"]').value = '';
+        }
+
+        // ==========================================
+        // Chat Functions
+        // ==========================================
+
+        function loadChatHistory() {
+            fetch('/api/chat/history')
+                .then(res => res.json())
+                .then(history => {
+                    const container = document.getElementById('chat-messages');
+                    const emptyMsg = document.getElementById('chat-empty');
+                    if (emptyMsg) emptyMsg.remove();
+                    container.innerHTML = '';
+
+                    history.forEach(msg => {
+                        appendChatMessage(msg.role, msg.content, msg.timestamp);
+                    });
+                    if (history.length === 0) {
+                        container.innerHTML = '<div id="chat-empty" style="text-align: center; color: #999; padding-top: 150px;">No messages yet. Start a conversation!</div>';
+                    }
+                    container.scrollTop = container.scrollHeight;
+                });
+        }
+
+        function loadModelList() {
+            fetch('/api/models')
+                .then(res => res.json())
+                .then(data => {
+                    const select = document.getElementById('model-select');
+                    select.innerHTML = '';
+                    if (data.models.length === 0) {
+                        const opt = document.createElement('option');
+                        opt.value = '';
+                        opt.textContent = data.message || "No models available";
+                        select.appendChild(opt);
+                    } else {
+                        data.models.forEach(model => {
+                            const opt = document.createElement('option');
+                            opt.value = model;
+                            opt.textContent = model;
+                            select.appendChild(opt);
+                        });
+                        if (data.selected) {
+                            select.value = data.selected;
+                        }
+                    }
+                })
+                .catch(err => {
+                    console.error("Failed to load model list:", err);
+                });
+        }
+
+        function changeModel(select) {
+            const modelName = select.value;
+            if (!modelName) {
+                showDynamicMessage("Please select a model first.", true);
+                return;
+            }
+            fetch('/api/models', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model_name: modelName })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    showDynamicMessage(data.error, true);
+                    loadModelList();
+                } else {
+                    showDynamicMessage(`Model switched to ${modelName}`, false);
+                }
+            })
+            .catch(err => {
+                showDynamicMessage("Failed to switch model: " + err.message, true);
+                loadModelList();
+            });
+        }
+
+        function loadModelToggleState() {
+            fetch('/api/model/loading_mode')
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('stay-loaded-toggle').checked = data.stay_loaded;
+                });
+        }
+
+        function toggleModelLoading(checkbox) {
+            fetch('/api/model/loading_mode', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stay_loaded: checkbox.checked })
+            })
+            .then(res => res.json())
+            .then(data => {
+                checkbox.checked = data.stay_loaded;
+            })
+            .catch(() => {
+                checkbox.checked = !checkbox.checked;
+                alert("Failed to update model loading mode");
+            });
+        }
+
+        function appendChatMessage(role, content, timestamp) {
+            const container = document.getElementById('chat-messages');
+            const emptyMsg = document.getElementById('chat-empty');
+            if (emptyMsg) emptyMsg.remove();
+
+            const div = document.createElement('div');
+            div.className = `chat-message chat-${role}`;
+            const timeStr = timestamp || new Date().toLocaleTimeString();
+            div.innerHTML = `
+                <div>${escapeHtml(content)}</div>
+                <div class="chat-meta">${role === 'user' ? 'You' : 'AI'} · ${timeStr}</div>
+            `;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function sendChatMessage(event) {
+            event.preventDefault();
+            const form = document.getElementById('chat-form');
+            const formData = new FormData(form);
+            const input = document.getElementById('chat-input');
+            const btn = document.getElementById('chat-btn');
+            const message = formData.get('message');
+
+            if (!message) return;
+
+            const originalText = btn.innerText;
+            btn.innerHTML = '<span class="btn-spinner"></span>';
+            btn.disabled = true;
+            input.disabled = true;
+
+            fetch('/api/chat/ask', { method: 'POST', body: formData })
+                .then(res => res.json())
+                .then(data => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    input.disabled = false;
+
+                    if (data.error) {
+                        alert(data.error);
+                        return;
+                    }
+
+                    appendChatMessage('user', message, new Date().toLocaleTimeString());
+                    appendChatMessage('assistant', data.answer, new Date().toLocaleTimeString());
+                    input.value = '';
+                })
+                .catch(err => {
+                    btn.innerText = originalText;
+                    btn.disabled = false;
+                    input.disabled = false;
+                    alert("Error connecting to chat backend.");
+                });
+        }
+
+        function clearChat() {
+            if (!confirm('Clear all chat messages?')) return;
+            fetch('/api/chat/clear', { method: 'POST' })
+                .then(res => res.json())
+                .then(() => {
+                    const container = document.getElementById('chat-messages');
+                    container.innerHTML = '<div id="chat-empty" style="text-align: center; color: #999; padding-top: 150px;">No messages yet. Start a conversation!</div>';
+                });
         }
     </script>
 </body>

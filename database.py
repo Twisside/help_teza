@@ -1,16 +1,14 @@
-﻿from datetime import datetime
+from datetime import datetime
+import os
 import uuid
 from abc import ABC, abstractmethod
+from dotenv import load_dotenv
 from pymongo import MongoClient
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from embedding import EmbeddingService, QwenEmbeddingService, GemmaEmbeddingService
-import os
-from dotenv import load_dotenv
-import os
+from embedding import LMSEmbeddingService
 
-load_dotenv()  # Loads variables from .env
-os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
+
 
 class DatabaseInterface(ABC):
     @abstractmethod
@@ -67,21 +65,15 @@ class MongoRepo(DatabaseInterface):
 
 
 class QdrantRepo(DatabaseInterface):
-    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cuda"):
+    def __init__(self, use_qwen: bool = True, storage_path="./db/qdrant_data", device="cpu"):
         self.path = storage_path
         self.client = None
         self.device = device
         self.tag_collection = "global_tags"
 
-        # FIX: Make the collection name dynamic based on the model
-        if use_qwen:
-            print("Initializing Qwen3-Embedding-0.6B...")
-            self.embedder = QwenEmbeddingService(device=self.device)
-            self.collection_name = "user_entries_qwen_1024" # Specific name for Qwen
-        else:
-            print("Initializing EmbeddingGemma-300M...")
-            self.embedder = GemmaEmbeddingService(device=self.device)
-            self.collection_name = "user_entries_gemma_768" # Specific name for Gemma
+        print("Initializing EmbeddingGemma-300M...")
+        self.embedder = LMSEmbeddingService()
+        self.collection_name = "user_entries_gemma_768" # Specific name for Gemma
 
 
     def connect(self):
@@ -128,26 +120,31 @@ class QdrantRepo(DatabaseInterface):
                 vector=vector,
                 payload={"tag_name": tag_name}
             )]
-        )
+)
 
 
     def insert(self, collection, data):
         target_col = self.collection_name
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
-        # --- NEW: Add Timestamp ---
-        # Using ISO format for clean sorting and human readability
+        print(f"[{ts}] DB: Starting insert for file: {data.get('filename', 'unknown')}")
+
         if "timestamp" not in data:
             data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         text_to_embed = data.get("content", "")
-        vector = self.embedder.embed_text(text_to_embed)
+        print(f"[{ts}] DB: Calling embed_text for: {data.get('filename', 'unknown')}")
+        vector = self.embedder.embed_text(text_to_embed, is_query=False)
+        print(f"[{ts}] DB: Embedding received for: {data.get('filename', 'unknown')}")
 
         point = models.PointStruct(
             id=str(uuid.uuid4()),
             vector=vector,
             payload=data
         )
-        return self.client.upsert(collection_name=target_col, points=[point])
+        result = self.client.upsert(collection_name=target_col, points=[point])
+        print(f"[{ts}] DB: Upsert complete for: {data.get('filename', 'unknown')}")
+        return result
 
     def update(self, collection, item_id, new_data):
         target_col = self.collection_name
@@ -156,7 +153,7 @@ class QdrantRepo(DatabaseInterface):
         new_data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         if "content" in new_data:
-            new_vector = self.embedder.embed_text(new_data["content"])
+            new_vector = self.embedder.embed_text(new_data["content"], is_query=False)
             return self.client.upsert(
                 collection_name=target_col,
                 points=[models.PointStruct(id=item_id, vector=new_vector, payload=new_data)]
@@ -220,3 +217,64 @@ class QdrantRepo(DatabaseInterface):
             })
 
         return results
+
+    def search_conversation_archive(self, query_text, limit=5):
+        """Search the conversation archive collection."""
+        archive_collection = "conversation_archive"
+        if not self.client.collection_exists(archive_collection):
+            return []
+
+        query_vector = self.embedder.embed_text(query_text)
+        response = self.client.query_points(
+            collection_name=archive_collection,
+            query=query_vector,
+            limit=limit,
+            with_payload=True
+        )
+
+        results = []
+        for hit in response.points:
+            results.append({
+                "id": hit.id,
+                "score": hit.score,
+                "payload": hit.payload
+            })
+        return results
+
+    def insert_to_conversation_archive(self, content: str, role: str, turn_index: int, tags: list):
+        """Insert a message into the conversation archive."""
+        archive_collection = "conversation_archive"
+        if not self.client.collection_exists(archive_collection):
+            self.client.create_collection(
+                collection_name=archive_collection,
+                vectors_config=models.VectorParams(
+                    size=self.embedder.dimension,
+                    distance=models.Distance.COSINE
+                ),
+            )
+
+        vector = self.embedder.embed_text(content, is_query=False)
+        payload = {
+            "content": content,
+            "role": role,
+            "turn_index": turn_index,
+            "tags": tags,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        point = models.PointStruct(
+            id=str(uuid.uuid4()),
+            vector=vector,
+            payload=payload
+        )
+        return self.client.upsert(collection_name=archive_collection, points=[point])
+
+    def clear_conversation_archive(self):
+        """Delete all points from the conversation archive."""
+        archive_collection = "conversation_archive"
+        if self.client.collection_exists(archive_collection):
+            self.client.delete(
+                collection_name=archive_collection,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(must=[])
+                )
+            )
